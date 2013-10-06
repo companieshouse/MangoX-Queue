@@ -27,7 +27,6 @@ WriteMakefile(
     'LICENSE'       => 'perl',
     'AUTHOR'        => 'Ian Kent <iankent@cpan.org>',
     'PREREQ_PM'     => {
-                           'Log::Declare' => '0.01',
                            'Mango' => '0.13'
                        },
     'dist'          => { COMPRESS => "gzip -9", SUFFIX => "gz" },

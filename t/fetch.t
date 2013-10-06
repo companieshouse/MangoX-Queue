@@ -14,16 +14,10 @@ $collection->remove;
 
 my $queue = MangoX::Queue->new(collection => $collection);
 
-BEGIN {
-	use Log::Declare;
-	#Log::Declare->startup_level('TRACE');
-}
-
 test_nonblocking_fetch();
 test_blocking_fetch();
 
 sub test_nonblocking_fetch {
-	trace "Enqueing job";
 	enqueue $queue 'test';
 
 	my $happened = 0;
@@ -37,16 +31,13 @@ sub test_nonblocking_fetch {
 
 	is($happened, 0, 'Non-blocking fetch successful');
 
-	trace "Starting IOLoop";
 	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 }
 
 sub test_blocking_fetch {
-	trace "Enqueing job";
 	enqueue $queue 'test';
 
 	my $item = fetch $queue;
-	trace "Got job in blocking mode: %s", d:$item;
 	isnt($item, undef, 'Found job in blocking fetch');
 }
 

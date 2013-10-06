@@ -4,11 +4,14 @@ use Mojo::Base -base;
 
 use Carp 'croak';
 use DateTime;
-use Log::Declare;
+use Mojo::Log;
 use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
 
 our $VERSION = '0.01';
+
+# A logger
+has 'log' => sub { Mojo::Log->new->level('error') };
 
 # The Mango::Collection representing the queue
 has 'collection';
@@ -99,13 +102,13 @@ sub enqueue {
 sub fetch {
 	my ($self, $callback) = @_;
 
-	trace "In fetch" [QUEUE];
+	$self->log->debug("In fetch");
 
 	if($callback) {
-		trace "Fetching in non-blocking mode" [QUEUE];
+		$self->log->debug("Fetching in non-blocking mode");
 		return Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($callback, 1) });
 	} else {
-		trace "Fetching in blocking mode" [QUEUE];
+		$self->log->debug("Fetching in blocking mode");
 		return $self->_watch_blocking(1);
 	}
 }
@@ -113,13 +116,13 @@ sub fetch {
 sub watch {
 	my ($self, $callback) = @_;
 
-	trace "In watch" [QUEUE];
+	$self->log->debug("In watch");
 
 	if($callback) {
-		trace "Watching in non-blocking mode" [QUEUE];
+		$self->log->debug("Watching in non-blocking mode");
 		return Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($callback, 0) });
 	} else {
-		trace "Watching in blocking mode" [QUEUE];
+		$self->log->debug("Watching in blocking mode");
 		return $self->_watch_blocking(0);
 	}
 }
@@ -129,7 +132,7 @@ sub _watch_blocking {
 
 	while(1) {
 		my $doc = $self->collection->find_and_modify($self->get_options);
-		trace "Job found by Mango: %s", ($doc ? 'Yes' : 'No') [QUEUE];
+		$self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 
 		if($doc) {
 			return $doc;
@@ -145,7 +148,7 @@ sub _watch_nonblocking {
 
 	$self->collection->find_and_modify($self->get_options => sub {
 		my ($cursor, $err, $doc) = @_;
-		trace "Job found by Mango: %s", ($doc ? 'Yes' : 'No') [QUEUE];
+		$self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 		
 		if($doc) {
 			$self->delay->reset;
