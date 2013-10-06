@@ -30,6 +30,17 @@ is($job->{priority}, 1, 'Priority is right');
 is($job->{status}, 'Pending', 'Status is right');
 is($job->{data}, 'test', 'Data is right');
 
+trace "Enqueing job with priority";
+enqueue $queue priority => 2, 'test';
+
+$job = fetch $queue;
+trace "Got job: %s", d:$job;
+
+isnt($job, undef, 'Got job from queue');
+is($job->{priority}, 2, 'Priority is right');
+is($job->{status}, 'Pending', 'Status is right');
+is($job->{data}, 'test', 'Data is right');
+
 trace "Enqueing another job";
 enqueue $queue +{
 	name => 'job_name',
@@ -43,6 +54,19 @@ is($job->{priority}, 1, 'Priority is right');
 is($job->{status}, 'Pending', 'Status is right');
 is(ref($job->{data}), 'HASH', 'Ref is right');
 is($job->{data}->{name}, 'job_name', 'Inner data is right');
+
+trace "Enqueing job with priority 2";
+enqueue $queue priority => 2, 'test';
+trace "Enqueing job with priority 1";
+enqueue $queue priority => 1, 'test';
+
+$job = fetch $queue;
+trace "Got job: %s", d:$job;
+is($job->{priority}, 1, 'Higher priority retrieved first');
+
+$job = fetch $queue;
+trace "Got job: %s", d:$job;
+is($job->{priority}, 2, 'Lower priority retrieved last');
 
 # To be notified when the job completes
 #enqueue $queue 'test' => sub {

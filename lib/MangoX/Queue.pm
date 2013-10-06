@@ -67,13 +67,24 @@ sub get_options {
 }
 
 sub enqueue {
-	my ($self, $job, $callback) = @_;
+	my ($self, @args) = @_;
+
+	# args maybe
+	# - 'job_name'
+	# - foo => bar, 'job_name'
+	# - 'job_name', $callback
+	# - foo => bar, 'job_name', $callback
+
+	my $callback = ref($args[-1]) eq 'CODE' ? pop @args : undef;
+	my $job = pop @args;
+	my %args;
+	%args = (@args) if scalar @args;
 
 	my $db_job = {
-		priority => 1,
-		created => DateTime->now,
+		priority => $args{priority} // 1,
+		created => $args{created} // DateTime->now,
 		data => $job,
-		status => 'Pending',
+		status => $args{status} // 'Pending',
 	};
 
 	my $id = $self->collection->insert($db_job);
@@ -182,6 +193,22 @@ MangoX::Queue - A MongoDB queue implementation using Mango
 	$queue->enqueue({
 		foo => 'bar'
 	});
+
+	# To set priority
+	enqueue $queue priority => 2, 'job_name';
+	$queue->enqueue(priority => 2, 'job_name');
+
+	# To set created
+	enqueue $queue created => DateTime->now, 'job_name';
+	$queue->enqueue(created => DateTime->now, 'job_name');
+
+	# To set status
+	enqueue $queue status => 'Pending', 'job_name';
+	$queue->enqueue(status => 'Pending', 'job_name');
+
+	# To set multiple options
+	enqueue $queue priority => 1, created => DateTime->now, 'job_name';
+	$queue->enqueue(priority => 1, created => DateTime->now, 'job_name');
 
 	# To fetch a job (blocking)
 	my $job = fetch $queue;
