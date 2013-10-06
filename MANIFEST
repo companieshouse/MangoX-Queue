@@ -3,6 +3,6 @@ lib/MangoX/Queue/Delay.pm
 t/enqueue.t
 t/watch.t
 t/fetch.t
-README
+README.md
 Makefile.PL
 MANIFEST
