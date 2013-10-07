@@ -259,6 +259,15 @@ sub _watch_nonblocking {
 
 MangoX::Queue - A MongoDB queue implementation using Mango
 
+=head1 DESCRIPTION
+
+L<MangoX::Queue> is a MongoDB backed queue implementation using L<Mango> to support
+blocking and non-blocking queues.
+
+L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
+collection - pass in a collection to the constructor and L<MangoX::Queue> will
+use it. The collection can be plain, capped or sharded.
+
 =head1 SYNOPSIS
 
 	use Mango;
@@ -357,15 +366,6 @@ MangoX::Queue - A MongoDB queue implementation using Mango
 		my ($job) = @_;
 		# ...
 	});
-
-=head1 DESCRIPTION
-
-L<MangoX::Queue> is a MongoDB backed queue implementation using L<Mango> to support
-blocking and non-blocking queues.
-
-L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
-collection - pass in a collection to the constructor and L<MangoX::Queue> will
-use it. The collection can be plain, capped or sharded.
 
 =head1 ATTRIBUTES
 
