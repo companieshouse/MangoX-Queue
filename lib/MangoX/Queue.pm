@@ -11,6 +11,11 @@ use MangoX::Queue::Delay;
 
 no warnings 'experimental::smartmatch';
 
+#rename watch to watch
+# 
+#hooks/plugin system to support statsd etc
+#support for consuming queues with custom queries (e.g. to consume a queue for failed items)
+
 our $VERSION = '0.02';
 
 # A logger
@@ -99,7 +104,7 @@ sub enqueue {
 	return $id;
 }
 
-sub monitor {
+sub watch {
 	my ($self, $id, $status, $callback) = @_;
 
 	$status //= 'Complete';
@@ -110,15 +115,15 @@ sub monitor {
 	if($callback) {
 		# Non-blocking
 		$self->log->debug("Waiting for $id on status $status in non-blocking mode");
-		return Mojo::IOLoop->timer(0 => sub { $self->_monitor_nonblocking($id, $status, $callback) });
+		return Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($id, $status, $callback) });
 	} else {
 		# Blocking
 		$self->log->debug("Waiting for $id on status $status in blocking mode");
-		return $self->_monitor_blocking($id, $status);
+		return $self->_watch_blocking($id, $status);
 	}
 }
 
-sub _monitor_blocking {
+sub _watch_blocking {
 	my ($self, $id, $status) = @_;
 
 	while(1) {
@@ -133,7 +138,7 @@ sub _monitor_blocking {
 	}
 }
 
-sub _monitor_nonblocking {
+sub _watch_nonblocking {
 	my ($self, $id, $status, $callback) = @_;
 
 	$self->collection->find_one({'_id' => $id} => sub {
@@ -148,7 +153,7 @@ sub _monitor_nonblocking {
 			$self->log->debug("Job not found or status doesn't match");
 			$self->delay->wait(sub {
 				return unless Mojo::IOLoop->is_running;
-				Mojo::IOLoop->timer(0 => sub { $self->_monitor_nonblocking($id, $status, $callback) });
+				Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($id, $status, $callback) });
 			});
 			return undef;
 		}
@@ -190,28 +195,28 @@ sub fetch {
 
 	if($callback) {
 		$self->log->debug("Fetching in non-blocking mode");
-		return Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($callback, 1) });
+		return Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback, 1) });
 	} else {
 		$self->log->debug("Fetching in blocking mode");
-		return $self->_watch_blocking(1);
+		return $self->_consume_blocking(1);
 	}
 }
 
-sub watch {
+sub consume {
 	my ($self, $callback) = @_;
 
-	$self->log->debug("In watch");
+	$self->log->debug("In consume");
 
 	if($callback) {
-		$self->log->debug("Watching in non-blocking mode");
-		return Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($callback, 0) });
+		$self->log->debug("consumeing in non-blocking mode");
+		return Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback, 0) });
 	} else {
-		$self->log->debug("Watching in blocking mode");
-		return $self->_watch_blocking(0);
+		$self->log->debug("consumeing in blocking mode");
+		return $self->_consume_blocking(0);
 	}
 }
 
-sub _watch_blocking {
+sub _consume_blocking {
 	my ($self, $fetch) = @_;
 
 	while(1) {
@@ -227,7 +232,7 @@ sub _watch_blocking {
 	}
 }
 
-sub _watch_nonblocking {
+sub _consume_nonblocking {
 	my ($self, $callback, $fetch) = @_;
 
 	$self->collection->find_and_modify($self->get_options => sub {
@@ -239,12 +244,12 @@ sub _watch_nonblocking {
 			$callback->($doc);
 			return unless Mojo::IOLoop->is_running;
 			return if $fetch;
-			Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($callback) });
+			Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback) });
 		} else {
 			$self->delay->wait(sub {
 				return unless Mojo::IOLoop->is_running;
 				return if $fetch;
-				Mojo::IOLoop->timer(0 => sub { $self->_watch_nonblocking($callback) });
+				Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback) });
 			});
 			return undef;
 		}
@@ -258,15 +263,6 @@ sub _watch_nonblocking {
 =head1 NAME
 
 MangoX::Queue - A MongoDB queue implementation using Mango
-
-=head1 DESCRIPTION
-
-L<MangoX::Queue> is a MongoDB backed queue implementation using L<Mango> to support
-blocking and non-blocking queues.
-
-L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
-collection - pass in a collection to the constructor and L<MangoX::Queue> will
-use it. The collection can be plain, capped or sharded.
 
 =head1 SYNOPSIS
 
@@ -308,19 +304,19 @@ use it. The collection can be plain, capped or sharded.
 
 	# To wait for a job status change (non-blocking)
 	my $id = enqueue $queue 'test';
-	monitor $queue $id, 'Complete' => sub {
+	watch $queue $id, 'Complete' => sub {
 		# Job status is 'Complete'
 	};
 
 	# To wait on mutliple statuses (non-blocking)
 	my $id = enqueue $queue 'test';
-	monitor $queue $id, ['Complete', 'Failed'] => sub {
+	watch $queue $id, ['Complete', 'Failed'] => sub {
 		# Job status is 'Complete' or 'Failed'
 	};
 
 	# To wait for a job status change (blocking)
 	my $id = enqueue $queue 'test';
-	monitor $queue $id, 'Complete';
+	watch $queue $id, 'Complete';
 
 	# To fetch a job (blocking)
 	my $job = fetch $queue;
@@ -349,23 +345,32 @@ use it. The collection can be plain, capped or sharded.
 	my $id = enqueue $queue 'test';
 	dequeue $queue $id;
 
-	# To watch a queue (blocking)
-	while (my $job = watch $queue) {
+	# To consume a queue (blocking)
+	while (my $job = consume $queue) {
 		# ...
 	}
-	while (my $job = $queue->watch) {
+	while (my $job = $queue->consume) {
 		# ...
 	}
 
-	# To watch a queue (non-blocking)
-	watch $queue sub {
+	# To consume a queue (non-blocking)
+	consume $queue sub {
 		my ($job) = @_;
 		# ...
 	};
-	$queue->watch(sub{
+	$queue->consume(sub{
 		my ($job) = @_;
 		# ...
 	});
+
+=head1 DESCRIPTION
+
+L<MangoX::Queue> is a MongoDB backed queue implementation using L<Mango> to support
+blocking and non-blocking queues.
+
+L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
+collection - pass in a collection to the constructor and L<MangoX::Queue> will
+use it. The collection can be plain, capped or sharded.
 
 =head1 ATTRIBUTES
 
@@ -407,6 +412,30 @@ it is released back into Pending state. Defaults to 60 seconds.
 =head1 METHODS
 
 L<MangoX::Queue> implements the following methods.
+
+=head2 consume
+
+	# In blocking mode
+	while(my $job = consume $queue) {
+		# ...
+	}
+	while(my $job = $queue->consume) {
+		# ...
+	}
+
+	# In non-blocking mode
+	consume $queue sub {
+		my ($job) = @_;
+		# ...
+	};
+	$queue->consume(sub {
+		my ($job) = @_;
+		# ...
+	});
+
+Waits for jobs to arrive on the queue, sleeping between queue checks using L<MangoX::Queue::Delay> or L<Mojo::IOLoop>.
+
+Currently sets the status to 'Retrieved' before returning the job.
 
 =head2 dequeue
 
@@ -462,18 +491,6 @@ Gets a job from the queue by ID. Doesn't change the job status.
 Returns the L<Mango::Collection> options hash used by find_and_modify to
 identify and update available queue items.
 
-=head2 monitor
-
-	# In blocking mode
-	my $id = enqueue $queue 'test';
-	monitor $queue $id, 'Complete'; # blocks until job is complete
-
-	# In non-blocking mode
-	my $id = enqueue $queue 'test';
-	monitor $queue $id, 'Complete' => sub {
-		# ...
-	};
-
 Wait for a job to enter a certain status.
 
 =head2 requeue
@@ -486,26 +503,14 @@ Requeues a job. Sets the job status to 'Pending'.
 =head2 watch
 
 	# In blocking mode
-	while(my $job = watch $queue) {
-		# ...
-	}
-	while(my $job = $queue->watch) {
-		# ...
-	}
+	my $id = enqueue $queue 'test';
+	watch $queue $id, 'Complete'; # blocks until job is complete
 
 	# In non-blocking mode
-	watch $queue sub {
-		my ($job) = @_;
+	my $id = enqueue $queue 'test';
+	watch $queue $id, 'Complete' => sub {
 		# ...
 	};
-	$queue->watch(sub {
-		my ($job) = @_;
-		# ...
-	});
-
-Watches the queue for jobs, sleeping between queue checks using L<MangoX::Queue::Delay>.
-
-Currently sets job status to 'Retrieved'.
 
 =head1 SEE ALSO
 
