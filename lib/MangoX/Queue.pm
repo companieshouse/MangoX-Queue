@@ -264,7 +264,18 @@ sub _consume_nonblocking {
 
 MangoX::Queue - A MongoDB queue implementation using Mango
 
+=head1 DESCRIPTION
+
+L<MangoX::Queue> is a MongoDB backed queue implementation using L<Mango> to support
+blocking and non-blocking queues.
+
+L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
+collection - pass in a collection to the constructor and L<MangoX::Queue> will
+use it. The collection can be plain, capped or sharded.
+
 =head1 SYNOPSIS
+
+These examples use non-blocking calls where available.
 
 	use Mango;
 	use MangoX::Queue;
@@ -274,103 +285,42 @@ MangoX::Queue - A MongoDB queue implementation using Mango
 
 	my $queue = MangoX::Queue->new(collection => $collection);
 
-	# To add a basic job
-	enqueue $queue 'some job name';
-	$queue->enqueue('some job name');
+	# To add a job
+	enqueue $queue 'test';
 
-	# To add a complex job
-	enqueue $queue +{
-		foo => 'bar'
-	};
-	$queue->enqueue({
-		foo => 'bar'
-	});
+	# To set options
+	enqueue $queue priority => 1, created => DateTime->now, 'test';
 
-	# To set priority
-	enqueue $queue priority => 2, 'job_name';
-	$queue->enqueue(priority => 2, 'job_name');
-
-	# To set created
-	enqueue $queue created => DateTime->now, 'job_name';
-	$queue->enqueue(created => DateTime->now, 'job_name');
-
-	# To set status
-	enqueue $queue status => 'Pending', 'job_name';
-	$queue->enqueue(status => 'Pending', 'job_name');
-
-	# To set multiple options
-	enqueue $queue priority => 1, created => DateTime->now, 'job_name';
-	$queue->enqueue(priority => 1, created => DateTime->now, 'job_name');
-
-	# To wait for a job status change (non-blocking)
+	# To watch a for specific job status
 	my $id = enqueue $queue 'test';
 	watch $queue $id, 'Complete' => sub {
 		# Job status is 'Complete'
 	};
 
-	# To wait on mutliple statuses (non-blocking)
-	my $id = enqueue $queue 'test';
-	watch $queue $id, ['Complete', 'Failed'] => sub {
-		# Job status is 'Complete' or 'Failed'
-	};
-
-	# To wait for a job status change (blocking)
-	my $id = enqueue $queue 'test';
-	watch $queue $id, 'Complete';
-
-	# To fetch a job (blocking)
-	my $job = fetch $queue;
-	my $job = $queue->fetch;
-
-	# To fetch a job (non-blocking)
+	# To fetch a job
 	fetch $queue sub {
 		my ($job) = @_;
 		# ...
 	};
-	$queue->fetch(sub {
-		my ($job) = @_;
-		# ...
-	});
 
-	# To get a job by id (currently blocking)
+	# To get a job by id
 	my $id = enqueue $queue 'test';
 	my $job = get $queue $id;
 
-	# To requeue a job (currently blocking)
+	# To requeue a job
 	my $id = enqueue $queue 'test';
 	my $job = get $queue $id;
 	requeue $queue $job;
 
-	# To dequeue a job (currently blocking)
+	# To dequeue a job
 	my $id = enqueue $queue 'test';
 	dequeue $queue $id;
 
-	# To consume a queue (blocking)
-	while (my $job = consume $queue) {
-		# ...
-	}
-	while (my $job = $queue->consume) {
-		# ...
-	}
-
-	# To consume a queue (non-blocking)
+	# To consume a queue
 	consume $queue sub {
 		my ($job) = @_;
 		# ...
 	};
-	$queue->consume(sub{
-		my ($job) = @_;
-		# ...
-	});
-
-=head1 DESCRIPTION
-
-L<MangoX::Queue> is a MongoDB backed queue implementation using L<Mango> to support
-blocking and non-blocking queues.
-
-L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
-collection - pass in a collection to the constructor and L<MangoX::Queue> will
-use it. The collection can be plain, capped or sharded.
 
 =head1 ATTRIBUTES
 
