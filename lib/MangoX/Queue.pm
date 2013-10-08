@@ -11,12 +11,10 @@ use MangoX::Queue::Delay;
 
 no warnings 'experimental::smartmatch';
 
-#rename watch to watch
-# 
-#hooks/plugin system to support statsd etc
-#support for consuming queues with custom queries (e.g. to consume a queue for failed items)
+# TODO 
+# hooks/plugin system to support statsd etc
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
@@ -32,6 +30,9 @@ has 'timeout' => sub { $ENV{MANGOX_QUEUE_JOB_TIMEOUT} // 60 };
 
 # How many times to retry a job before giving up
 has 'retries' => sub { $ENV{MANGOX_QUEUE_JOB_RETRIES} // 5 };
+
+# Store Mojo::IOLoop->timer IDs
+has 'consumers' => sub { {} };
 
 sub new {
 	my $self = shift->SUPER::new(@_);
@@ -99,9 +100,14 @@ sub enqueue {
 	};
 
 	# TODO allow non-blocking enqueue
-	my $id = $self->collection->insert($db_job);
-
-	return $id;
+	if($callback) {
+		return $self->collection->insert($db_job => sub {
+			my ($collection, $error, $oid) = @_;
+			$callback->($oid);
+		});
+	} else {
+		return $self->collection->insert($db_job);
+	}
 }
 
 sub watch {
@@ -110,7 +116,7 @@ sub watch {
 	$status //= 'Complete';
 
 	# args
-	# - wait $queue $id, 'Status' => $callback
+	# - watch $queue $id, 'Status' => $callback
 
 	if($callback) {
 		# Non-blocking
@@ -161,66 +167,116 @@ sub _watch_nonblocking {
 }
 
 sub requeue {
-	my ($self, $job) = @_;
+	my ($self, $job, $callback) = @_;
 
 	$job->{status} = 'Pending';
-	my $id = $self->collection->update({'_id' => $job->{_id}}, $job, {upsert => 1});
-
-	return $id;
-
-	# TODO non-blocking
+	return $self->update($job, $callback);
 }
 
 sub dequeue {
-	my ($self, $id) = @_;
+	my ($self, $id, $callback) = @_;
 
 	# TODO option to not remove on dequeue?
-	# TODO non-blocking
 
-	$self->collection->remove({'_id' => $id});
+	if($callback) {
+		$self->collection->remove({'_id' => $id} => sub {
+			$callback->();
+		});
+	} else {
+		$self->collection->remove({'_id' => $id});
+	}
 }
 
 sub get {
-	my ($self, $id) = @_;
+	my ($self, $id, $callback) = @_;
 
-	# TODO non-blocking
+	if($callback) {
+		return $self->collection->find_one({'_id' => $id} => sub {
+			my ($collection, $error, $doc) = @_;
+			$callback->($doc);
+		});
+	} else {
+		return $self->collection->find_one({'_id' => $id});
+	}
+}
 
-	return $self->collection->find_one({'_id' => $id});
+sub update {
+	my ($self, $job, $callback) = @_;
+
+	if($callback) {
+		return $self->collection->find_one({'_id' => $job->{_id}} => sub {
+			my ($collection, $error, $doc) = @_;
+			$callback->($doc);
+		});
+	} else {
+		return $self->collection->update({'_id' => $job->{_id}}, $job, {upsert => 1});
+	}
 }
 
 sub fetch {
-	my ($self, $callback) = @_;
+	my ($self, @args) = @_;
+
+	# fetch $queue status => 'Complete', sub { my $job = shift; }
+
+	my $callback = ref($args[-1]) eq 'CODE' ? pop @args : undef;
+	my %args;
+	%args = (@args) if scalar @args;
 
 	$self->log->debug("In fetch");
 
 	if($callback) {
 		$self->log->debug("Fetching in non-blocking mode");
-		return Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback, 1) });
+		my $consumer_id = (scalar keys %{$self->consumers}) + 1;
+		$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking(\%args, $consumer_id, $callback, 1) });
+		return $consumer_id;
 	} else {
 		$self->log->debug("Fetching in blocking mode");
-		return $self->_consume_blocking(1);
+		return $self->_consume_blocking(\%args, 1);
 	}
 }
 
 sub consume {
-	my ($self, $callback) = @_;
+	my ($self, @args) = @_;
+
+	# consume $queue status => 'Failed', sub { my $job = shift; }
+
+	my $callback = ref($args[-1]) eq 'CODE' ? pop @args : undef;
+	my %args;
+	%args = (@args) if scalar @args;
 
 	$self->log->debug("In consume");
 
 	if($callback) {
-		$self->log->debug("consumeing in non-blocking mode");
-		return Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback, 0) });
+		$self->log->debug("consuming in non-blocking mode");
+		my $consumer_id = (scalar keys %{$self->consumers}) + 1;
+		$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking(\%args, $consumer_id, $callback, 0) });
+		$self->log->debug("Timer scheduled, consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
+		return $consumer_id;
 	} else {
-		$self->log->debug("consumeing in blocking mode");
-		return $self->_consume_blocking(0);
+		$self->log->debug("consuming in blocking mode");
+		return $self->_consume_blocking(\%args, 0);
 	}
 }
 
+sub release {
+	my ($self, $consumer_id) = @_;
+
+	$self->log->debug("Releasing consumer $consumer_id with timer ID: " . $self->consumers->{$consumer_id});
+
+	Mojo::IOLoop->remove($self->consumers->{$consumer_id});
+	delete $self->consumers->{$consumer_id};
+
+	return;
+}
+
 sub _consume_blocking {
-	my ($self, $fetch) = @_;
+	my ($self, $args, $fetch) = @_;
 
 	while(1) {
-		my $doc = $self->collection->find_and_modify($self->get_options);
+		my $opts = $self->get_options;
+		$opts->{query} = $args if scalar keys %$args;
+
+		my $doc = $self->collection->find_and_modify($opts);
 		$self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 
 		if($doc) {
@@ -233,9 +289,12 @@ sub _consume_blocking {
 }
 
 sub _consume_nonblocking {
-	my ($self, $callback, $fetch) = @_;
+	my ($self, $args, $consumer_id, $callback, $fetch) = @_;
 
-	$self->collection->find_and_modify($self->get_options => sub {
+	my $opts = $self->get_options;
+	$opts->{query} = $args if scalar keys %$args;
+
+	$self->collection->find_and_modify($opts => sub {
 		my ($cursor, $err, $doc) = @_;
 		$self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 		
@@ -244,12 +303,16 @@ sub _consume_nonblocking {
 			$callback->($doc);
 			return unless Mojo::IOLoop->is_running;
 			return if $fetch;
-			Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback) });
+			return unless exists $self->consumers->{$consumer_id};
+			$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
+			$self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
 		} else {
+			return unless Mojo::IOLoop->is_running;
+			return if $fetch;
 			$self->delay->wait(sub {
-				return unless Mojo::IOLoop->is_running;
-				return if $fetch;
-				Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($callback) });
+				return unless exists $self->consumers->{$consumer_id};
+				$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
+				$self->log->debug("Timer rescheduled (recursive delayed), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
 			});
 			return undef;
 		}
@@ -275,8 +338,6 @@ use it. The collection can be plain, capped or sharded.
 
 =head1 SYNOPSIS
 
-These examples use non-blocking calls where available.
-
 	use Mango;
 	use MangoX::Queue;
 
@@ -286,41 +347,49 @@ These examples use non-blocking calls where available.
 	my $queue = MangoX::Queue->new(collection => $collection);
 
 	# To add a job
-	enqueue $queue 'test';
+	my $id = enqueue $queue 'test'; # Blocking
+	enqueue $queue 'test' => sub { my $id = shift; }; # Non-blocking
 
 	# To set options
-	enqueue $queue priority => 1, created => DateTime->now, 'test';
+	my $id = enqueue $queue priority => 1, created => DateTime->now, 'test'; # Blocking
+	enqueue $queue priority => 1, created => DateTime->now, 'test' => sub { my $id = shift; }; # Non-blocking
 
-	# To watch a for specific job status
-	my $id = enqueue $queue 'test';
-	watch $queue $id, 'Complete' => sub {
+	# To watch for a specific job status
+	watch $queue $id; # Blocking
+	watch $queue $id, 'Complete' => sub { # Non-blocking
 		# Job status is 'Complete'
 	};
 
 	# To fetch a job
-	fetch $queue sub {
+	my $job = fetch $queue; # Blocking
+	fetch $queue sub { # Non-blocking
 		my ($job) = @_;
 		# ...
 	};
 
 	# To get a job by id
-	my $id = enqueue $queue 'test';
-	my $job = get $queue $id;
+	my $job = get $queue $id; # Blocking
+	get $queue $id => sub { my $job = shift; }; # Non-blocking
 
 	# To requeue a job
-	my $id = enqueue $queue 'test';
-	my $job = get $queue $id;
-	requeue $queue $job;
+	my $id = requeue $queue $job; # Blocking
+	requeue $queue $job => sub { my $id = shift; }; # Non-blocking
 
 	# To dequeue a job
-	my $id = enqueue $queue 'test';
-	dequeue $queue $id;
+	dequeue $queue $id; # Blocking
+	dequeue $queue $id => sub { }; # Non-blocking
 
 	# To consume a queue
-	consume $queue sub {
+	while(my $job = consume $queue) { # Blocking
+		# ...
+	}
+	my $consumer = consume $queue sub { # Non-blocking
 		my ($job) = @_;
 		# ...
 	};
+
+	# To stop consuming a queue
+	release $queue $consumer;
 
 =head1 ATTRIBUTES
 
@@ -443,12 +512,29 @@ identify and update available queue items.
 
 Wait for a job to enter a certain status.
 
+=head2 release
+
+	my $consumer = consume $queue sub {
+		# ...
+	};
+	release $queue $consumer;
+
+Releases a non-blocking consumer from watching a queue.
+
 =head2 requeue
 
 	my $job = fetch $queue;
 	requeue $queue $job;
 
 Requeues a job. Sets the job status to 'Pending'.
+
+=head2 update
+
+	my $job = fetch $queue;
+	$job->{status} = 'Failed';
+	update $queue $job;
+
+Updates a job in the queue.
 
 =head2 watch
 
