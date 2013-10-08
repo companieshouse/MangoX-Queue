@@ -16,63 +16,69 @@ my $queue = MangoX::Queue->new(collection => $collection);
 
 # Note - no easy/sensible way to test blocking watch
 # But we'll check it at least returns
-my $id = enqueue $queue status => 'Complete', 'test';
-watch $queue $id, 'Complete';
+my $job = enqueue $queue status => 'Complete', 'test';
+watch $queue $job, 'Complete';
 ok(1, 'Blocking watch returned');
 
 # Single watch watching a single status
 
-$id = enqueue $queue 'test';
+$job = enqueue $queue 'test';
 
-watch $queue $id, 'Complete' => sub {
+watch $queue $job, 'Complete' => sub {
 	ok(1, 'Job status is complete');
 	Mojo::IOLoop->stop;
 };
 
 Mojo::IOLoop->timer(1 => sub {
-	$collection->update({'_id' => $id}, { '$set' => {'status' => 'Complete'}});
+	$job->{status} = 'Complete';
+	update $queue $job;
 });
 
 Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 
 # Single watch watching multiple statuses
 
-$id = enqueue $queue 'test';
-watch $queue $id, ['Complete','Failed'] => sub {
+$job = enqueue $queue 'test';
+watch $queue $job, ['Complete','Failed'] => sub {
 	ok(1, 'Job status is complete or failed');
-	$collection->update({'_id' => $id}, { '$set' => {'status' => 'Pending'}});
-	watch $queue $id, ['Complete','Failed'] => sub {
+	$job->{status} = 'Pending';
+	update $queue $job;
+	watch $queue $job, ['Complete','Failed'] => sub {
 		ok(1, 'Job status is complete or failed');
 		Mojo::IOLoop->stop;
 	};
 	Mojo::IOLoop->timer(1 => sub {
-		$collection->update({'_id' => $id}, { '$set' => {'status' => 'Failed'}});
+		$job->{status} = 'Failed';
+		update $queue $job;
 	});
 };
 
 Mojo::IOLoop->timer(1 => sub {
-	$collection->update({'_id' => $id}, { '$set' => {'status' => 'Complete'}});
+	$job->{status} = 'Complete';
+	update $queue $job;
 });
 
 Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 
 # Separate complete/failed watchs
 
-$id = enqueue $queue 'test';
+$job = enqueue $queue 'test';
 
-watch $queue $id, 'Complete' => sub {
+watch $queue $job, 'Complete' => sub {
 	ok(1, 'Job status is complete');
 	Mojo::IOLoop->timer(1 => sub {
-		$collection->update({'_id' => $id}, { '$set' => {'status' => 'Failed'}});
+		$job->{status} = 'Failed';
+		update $queue $job;
 	});
 };
-watch $queue $id, 'Failed' => sub {
+watch $queue $job, 'Failed' => sub {
 	ok(1, 'Job status is failed');
 	Mojo::IOLoop->stop;
 };
 
 Mojo::IOLoop->timer(1 => sub {
-	$collection->update({'_id' => $id}, { '$set' => {'status' => 'Complete'}});
+	$job->{status} = 'Complete';
+	update $queue $job;
 });
 
 Mojo::IOLoop->start unless Mojo::IOLoop->is_running;

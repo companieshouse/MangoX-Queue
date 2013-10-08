@@ -1,6 +1,6 @@
 package MangoX::Queue;
 
-use Mojo::Base -base;
+use Mojo::Base 'Mojo::EventEmitter';
 
 use Carp 'croak';
 use DateTime;
@@ -10,9 +10,6 @@ use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
 
 no warnings 'experimental::smartmatch';
-
-# TODO 
-# hooks/plugin system to support statsd etc
 
 our $VERSION = '0.03';
 
@@ -34,12 +31,34 @@ has 'retries' => sub { $ENV{MANGOX_QUEUE_JOB_RETRIES} // 5 };
 # Store Mojo::IOLoop->timer IDs
 has 'consumers' => sub { {} };
 
+# Store plugins
+has 'plugins' => sub { {} };
+
 sub new {
 	my $self = shift->SUPER::new(@_);
 
 	croak qq{No Mango::Collection provided to constructor} unless ref($self->collection) eq 'Mango::Collection';
 
 	return $self;
+}
+
+sub plugin {
+	my ($self, $name, $options) = @_;
+
+	croak qq{Plugin $name already loaded} if exists $self->plugins->{$name};
+
+	{
+		no strict 'refs';
+		unless($name->can('new')) {
+			eval "require $name" or croak qq{Failed to load plugin $name: $@};
+		}
+	}
+
+	$self->plugins->{$name} = $name->new(%$options);
+
+	$self->plugins->{$name}->register($self);
+
+	return $self->plugins->{$name};
 }
 
 sub get_options {
@@ -99,19 +118,25 @@ sub enqueue {
 		attempt => 1,
 	};
 
-	# TODO allow non-blocking enqueue
 	if($callback) {
 		return $self->collection->insert($db_job => sub {
 			my ($collection, $error, $oid) = @_;
-			$callback->($oid);
+			$db_job->{_id} = $oid;
+			$self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
+			$callback->($db_job);
 		});
 	} else {
-		return $self->collection->insert($db_job);
+		my $id = $self->collection->insert($db_job);
+		$db_job->{_id} = $id;
+		$self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
+		return $db_job;
 	}
 }
 
 sub watch {
-	my ($self, $id, $status, $callback) = @_;
+	my ($self, $id_or_job, $status, $callback) = @_;
+
+	my $id = ref($id_or_job) ? $id_or_job->{_id} : $id_or_job;
 
 	$status //= 'Complete';
 
@@ -174,21 +199,27 @@ sub requeue {
 }
 
 sub dequeue {
-	my ($self, $id, $callback) = @_;
+	my ($self, $id_or_job, $callback) = @_;
 
 	# TODO option to not remove on dequeue?
+
+	my $id = ref($id_or_job) ? $id_or_job->{_id} : $id_or_job;
 
 	if($callback) {
 		$self->collection->remove({'_id' => $id} => sub {
 			$callback->();
+			$self->emit_safe(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
 		});
 	} else {
 		$self->collection->remove({'_id' => $id});
+		$self->emit_safe(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
 	}
 }
 
 sub get {
-	my ($self, $id, $callback) = @_;
+	my ($self, $id_or_job, $callback) = @_;
+
+	my $id = ref($id_or_job) ? $id_or_job->{_id} : $id_or_job;
 
 	if($callback) {
 		return $self->collection->find_one({'_id' => $id} => sub {
@@ -280,6 +311,7 @@ sub _consume_blocking {
 		$self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 
 		if($doc) {
+			$self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
 			return $doc;
 		} else {
 			last if $fetch;
@@ -300,6 +332,7 @@ sub _consume_nonblocking {
 		
 		if($doc) {
 			$self->delay->reset;
+			$self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
 			$callback->($doc);
 			return unless Mojo::IOLoop->is_running;
 			return if $fetch;
@@ -391,17 +424,17 @@ use it. The collection can be plain, capped or sharded.
 	# To stop consuming a queue
 	release $queue $consumer;
 
+	# To listen for events
+	on $queue enqueued => sub ( my ($queue, $job) = @_; };
+	on $queue dequeued => sub ( my ($queue, $job) = @_; };
+	on $queue consumed => sub { my ($queue, $job) = @_; };
+
+	# To register a plugin
+	plugin $queue 'MangoX::Queue::Plugin::Statsd';
+
 =head1 ATTRIBUTES
 
 L<MangoX::Queue> implements the following attributes.
-
-=head2 delay
-
-	my $delay = $queue->delay;
-	$queue->delay(MangoX::Queue::Delay->new);
-
-The L<MangoX::Queue::Delay> responsible for dynamically controlling the
-delay between queue queries.
 
 =head2 collection
 
@@ -411,6 +444,20 @@ delay between queue queries.
     my $queue = MangoX::Queue->new(collection => $collection);
 
 The L<Mango::Collection> representing the MongoDB queue collection.
+
+=head2 delay
+
+	my $delay = $queue->delay;
+	$queue->delay(MangoX::Queue::Delay->new);
+
+The L<MangoX::Queue::Delay> responsible for dynamically controlling the
+delay between queue queries.
+
+=head2 plugins
+
+	my $plugins = $queue->plugins;
+
+Returns a hash containing the plugins registered with this queue.
 
 =head2 retries
 
@@ -427,6 +474,37 @@ marked as failed.
 
 The time (in seconds) a job is allowed to stay in Retrieved state before
 it is released back into Pending state. Defaults to 60 seconds.
+
+=head1 EVENTS
+
+L<MangoX::Queue> inherits from L<Mojo::EventEmitter> and emits the following events
+
+=head2 consumed
+
+	on $queue consumed => sub {
+		my ($queue, $job) = @_;
+		# ...
+	};
+
+Emitted when an item is consumed (either via consume or fetch)
+
+=head2 dequeued
+
+	on $queue dequeued => sub {
+		my ($queue, $job) = @_;
+		# ...
+	};
+
+Emitted when an item is dequeued
+
+=head2 enqueued
+
+	on $queue enqueued => sub {
+		my ($queue, $job) = @_;
+		# ...
+	};
+
+Emitted when an item is enqueued
 
 =head1 METHODS
 
