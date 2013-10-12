@@ -6,6 +6,8 @@ MangoX::Queue::Tutorial
 
 =head1 QUICK START
 
+=head2 Non-blocking mode using L<Mojo::IOLoop>
+
 =over 2
 
 =item 1
@@ -19,11 +21,72 @@ Get a L<Mango> collection
 
 Create a L<MangoX::Queue>
 
-	my $queue = MangoX::Queue->new(collection => $mango);
+	my $queue = MangoX::Queue->new(collection => $collection);
 
 =item 3
 
-Add an item to the queue
+Add a job to the queue
+
+	enqueue $queue 'job_name' => sub {
+		my ($job_id) = @_;
+		# ...
+	}
+
+=item 4
+
+Consume the queue to receive jobs
+
+	my $consumer = consume $queue sub {
+		my ($job) = @_;
+		# ...
+	};
+
+=item 5
+
+Stop consuming the queue
+
+	release $queue $consumer;
+
+=item 6
+
+Update the job status in the queue
+
+	$job->{status} = 'Finished';
+	update $queue $job => sub {
+		my ($job) = @_;
+		# ...
+	};
+
+=item 7
+
+Remove the job from the queue
+
+	dequeue $queue $job => sub {
+		# ...
+	};
+
+=back
+
+=head2 Blocking mode
+
+=over 2
+
+=item 1
+
+Get a L<Mango> collection
+
+	my $mango = Mango->new('mongodb://localhost:27017');
+	my $collection = $mango->db('foo')->collection('bar');
+
+=item 2
+
+Create a L<MangoX::Queue>
+
+	my $queue = MangoX::Queue->new(collection => $collection);
+
+=item 3
+
+Add a job to the queue
 
 	my $job_id = enqueue $queue 'job_name';
 
@@ -31,14 +94,16 @@ Add an item to the queue
 
 Consume the queue to receive jobs
 
-	my $job = consume $queue;
+	while (my $job = consume $queue) {
+		# ...
+	};
 
 =item 5
 
 Update the job status in the queue
 
 	$job->{status} = 'Finished';
-	update $queue $job;
+	my $job = update $queue $job;
 
 =item 6
 
