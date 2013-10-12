@@ -496,6 +496,9 @@ Non-blocking mode requires a running L<Mojo::IOLoop>.
     on $queue dequeued => sub ( my ($queue, $job) = @_; };
     on $queue consumed => sub { my ($queue, $job) = @_; };
 
+    # To listen for errors
+    on $queue error => sub { my ($queue, $error) = @_; };
+
     # To register a plugin
     plugin $queue 'MangoX::Queue::Plugin::Statsd';
 
