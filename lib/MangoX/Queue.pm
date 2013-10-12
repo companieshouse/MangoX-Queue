@@ -54,9 +54,13 @@ sub plugin {
 		}
 	}
 
-	$self->plugins->{$name} = $name->new(%$options);
+	eval {
+		$self->plugins->{$name} = $name->new(%$options);			
+	} or croak qq{Error calling constructor for plugin $name: $@};
 
-	$self->plugins->{$name}->register($self);
+	eval {
+		$self->plugins->{$name}->register($self);
+	} or croak qq{Error calling register for plugin $name: $@};
 
 	return $self->plugins->{$name};
 }
@@ -369,60 +373,84 @@ L<MangoX::Queue> makes no attempt to handle the L<Mango> connection, database or
 collection - pass in a collection to the constructor and L<MangoX::Queue> will
 use it. The collection can be plain, capped or sharded.
 
+For an introduction to L<MangoX::Queue>, see L<MangoX::Queue::Tutorial>.
+
 =head1 SYNOPSIS
 
-	use Mango;
-	use MangoX::Queue;
+=head2 Non-blocking
 
-	my $mango = Mango->new("mongodb://localhost:27017");
-	my $collection = $mango->db('my_db')->collection('my_queue');
+Non-blocking mode requires a running L<Mojo::IOLoop>.
 
-	my $queue = MangoX::Queue->new(collection => $collection);
+	my $queue = MangoX::Queue->new(collection => $mango_collection);
 
 	# To add a job
-	my $id = enqueue $queue 'test'; # Blocking
-	enqueue $queue 'test' => sub { my $id = shift; }; # Non-blocking
+	enqueue $queue 'test' => sub { my $id = shift; };
 
 	# To set options
-	my $id = enqueue $queue priority => 1, created => DateTime->now, 'test'; # Blocking
-	enqueue $queue priority => 1, created => DateTime->now, 'test' => sub { my $id = shift; }; # Non-blocking
+	enqueue $queue priority => 1, created => DateTime->now, 'test' => sub { my $id = shift; };
 
 	# To watch for a specific job status
-	watch $queue $id; # Blocking
-	watch $queue $id, 'Complete' => sub { # Non-blocking
+	watch $queue $id, 'Complete' => sub {
 		# Job status is 'Complete'
 	};
 
 	# To fetch a job
-	my $job = fetch $queue; # Blocking
-	fetch $queue sub { # Non-blocking
+	fetch $queue sub {
 		my ($job) = @_;
 		# ...
 	};
 
 	# To get a job by id
-	my $job = get $queue $id; # Blocking
-	get $queue $id => sub { my $job = shift; }; # Non-blocking
+	get $queue $id => sub { my $job = shift; };
 
 	# To requeue a job
-	my $id = requeue $queue $job; # Blocking
-	requeue $queue $job => sub { my $id = shift; }; # Non-blocking
+	requeue $queue $job => sub { my $id = shift; };
 
 	# To dequeue a job
-	dequeue $queue $id; # Blocking
-	dequeue $queue $id => sub { }; # Non-blocking
+	dequeue $queue $id => sub { };
 
 	# To consume a queue
-	while(my $job = consume $queue) { # Blocking
-		# ...
-	}
-	my $consumer = consume $queue sub { # Non-blocking
+	my $consumer = consume $queue sub {
 		my ($job) = @_;
 		# ...
 	};
 
 	# To stop consuming a queue
 	release $queue $consumer;
+
+=head2 Blocking
+
+	my $queue = MangoX::Queue->new(collection => $mango_collection);
+
+	# To add a job
+	my $id = enqueue $queue 'test';
+
+	# To set options
+	my $id = enqueue $queue priority => 1, created => DateTime->now, 'test';
+
+	# To watch for a specific job status
+	watch $queue $id;
+
+	# To fetch a job
+	my $job = fetch $queue;
+
+	# To get a job by id
+	my $job = get $queue $id;
+
+	# To requeue a job
+	my $id = requeue $queue $job;
+
+	# To dequeue a job
+	dequeue $queue $id;
+
+	# To consume a queue
+	while(my $job = consume $queue) {
+		# ...
+	}
+
+=head2 Other
+
+	my $queue = MangoX::Queue->new(collection => $mango_collection);
 
 	# To listen for events
 	on $queue enqueued => sub ( my ($queue, $job) = @_; };
@@ -477,7 +505,9 @@ it is released back into Pending state. Defaults to 60 seconds.
 
 =head1 EVENTS
 
-L<MangoX::Queue> inherits from L<Mojo::EventEmitter> and emits the following events
+L<MangoX::Queue> inherits from L<Mojo::EventEmitter> and emits the following events.
+
+Events are emitted only for actions on the current queue object, not the entire queue.
 
 =head2 consumed
 
@@ -543,17 +573,37 @@ Dequeues a job. Currently removes it from the collection.
 
 =head2 enqueue
 
-	enqueue $queue 'job name';
-	enqueue $queue [ 'some', 'data' ];
-	enqueue $queue +{ foo => 'bar' };
+	my $id = enqueue $queue 'job name';
+	my $id = enqueue $queue [ 'some', 'data' ];
+	my $id = enqueue $queue +{ foo => 'bar' };
 
-	$queue->enqueue('job name');
-	$queue->enqueue([ 'some', 'data' ]);
-	$queue->enqueue({ foo => 'bar' });
+	my $id = $queue->enqueue('job name');
+	my $id = $queue->enqueue([ 'some', 'data' ]);
+	my $id = $queue->enqueue({ foo => 'bar' });
 
-Add an item to the queue.
+Add an item to the queue in blocking mode.
 
-Currently uses priority 1 with a job status of 'Pending'.
+You can set queue options including priority, created and status.
+
+	my $id = enqueue $queue,  
+		priority => 1,
+		created => DateTime->now,
+		status => 'Pending',
+		+{
+			foo => 'bar'
+		};
+
+For non-blocking mode, pass in a coderef as the final argument.
+
+	my $id = enqueue $queue 'job_name' => sub {
+		# ...
+	};
+
+	my $id = enqueue $queue priority => 1, +{
+		foo => 'bar',
+	} => sub {
+		# ...
+	};
 
 =head2 fetch
 
@@ -577,9 +627,20 @@ Currently sets job status to 'Retrieved'.
 
 =head2 get
 
+	# In non-blocking mode
+	get $queue $id => sub {
+		my ($job) = @_;
+		# ...
+	};
+
+	# In blocking mode
 	my $job = get $queue $id;
 
 Gets a job from the queue by ID. Doesn't change the job status.
+
+You can also pass in a job instead of an ID.
+
+	my $job = get $queue $job;
 
 =head2 get_options
 
@@ -628,6 +689,6 @@ Updates a job in the queue.
 
 =head1 SEE ALSO
 
-L<Mojolicious>, L<Mango>
+L<MangoX::Queue::Tutorial>, L<Mojolicious>, L<Mango>
 
 =cut
