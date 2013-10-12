@@ -546,19 +546,12 @@ L<MangoX::Queue> implements the following methods.
     while(my $job = consume $queue) {
         # ...
     }
-    while(my $job = $queue->consume) {
-        # ...
-    }
 
     # In non-blocking mode
     consume $queue sub {
         my ($job) = @_;
         # ...
     };
-    $queue->consume(sub {
-        my ($job) = @_;
-        # ...
-    });
 
 Waits for jobs to arrive on the queue, sleeping between queue checks using L<MangoX::Queue::Delay> or L<Mojo::IOLoop>.
 
@@ -576,10 +569,6 @@ Dequeues a job. Currently removes it from the collection.
     my $id = enqueue $queue 'job name';
     my $id = enqueue $queue [ 'some', 'data' ];
     my $id = enqueue $queue +{ foo => 'bar' };
-
-    my $id = $queue->enqueue('job name');
-    my $id = $queue->enqueue([ 'some', 'data' ]);
-    my $id = $queue->enqueue({ foo => 'bar' });
 
 Add an item to the queue in blocking mode.
 
@@ -609,17 +598,12 @@ For non-blocking mode, pass in a coderef as the final argument.
 
     # In blocking mode
     my $job = fetch $queue;
-    my $job = $queue->fetch;
 
     # In non-blocking mode
     fetch $queue sub {
         my ($job) = @_;
         # ...
     };
-    $queue->fetch(sub {
-        my ($job) = @_;
-        # ...
-    });
 
 Fetch a single job from the queue, returning undef if no jobs are available.
 
