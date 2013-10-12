@@ -457,6 +457,9 @@ Non-blocking mode requires a running L<Mojo::IOLoop>.
     # To stop consuming a queue
     release $queue $consumer;
 
+    # To listen for errors
+    on $queue error => sub { my ($queue, $error) = @_; };
+
 =head2 Blocking
 
     my $queue = MangoX::Queue->new(collection => $mango_collection);
@@ -495,9 +498,6 @@ Non-blocking mode requires a running L<Mojo::IOLoop>.
     on $queue enqueued => sub ( my ($queue, $job) = @_; };
     on $queue dequeued => sub ( my ($queue, $job) = @_; };
     on $queue consumed => sub { my ($queue, $job) = @_; };
-
-    # To listen for errors
-    on $queue error => sub { my ($queue, $error) = @_; };
 
     # To register a plugin
     plugin $queue 'MangoX::Queue::Plugin::Statsd';
