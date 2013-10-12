@@ -11,7 +11,7 @@ use MangoX::Queue::Delay;
 
 no warnings 'experimental::smartmatch';
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
