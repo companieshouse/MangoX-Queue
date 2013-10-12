@@ -34,6 +34,15 @@ has 'consumers' => sub { {} };
 # Store plugins
 has 'plugins' => sub { {} };
 
+# Which status should be collected from the queue (can be scalar or array ref)
+has 'pending_status' => sub { 'Pending' };
+
+# The status which is set when a job is consumed from the queue
+has 'processing_status' => sub { 'Processing' };
+
+# The status to use when a job has failed
+has 'failed_status' => sub { 'Failed' };
+
 sub new {
     my $self = shift->SUPER::new(@_);
 
@@ -55,11 +64,13 @@ sub plugin {
     }
 
     eval {
-        $self->plugins->{$name} = $name->new(%$options);            
+        $self->plugins->{$name} = $name->new(%$options);  
+        return 1;          
     } or croak qq{Error calling constructor for plugin $name: $@};
 
     eval {
         $self->plugins->{$name}->register($self);
+        return 1;
     } or croak qq{Error calling register for plugin $name: $@};
 
     return $self->plugins->{$name};
@@ -72,21 +83,23 @@ sub get_options {
         query => {
             '$or' => [{
                 status => {
-                    '$in' => [ 'Pending' ]
-                }
-            },{
-                status => {
-                    '$in' => [ 'Retrieved' ]
+                    '$in' => ref($self->pending_status) eq 'ARRAY' ? $self->pending_status : [ $self->pending_status ],
                 },
-                retrieved => {
+                '$or' => [ { processing => 0 }, { processing => undef } ],
+            },{
+                status => $self->processing_status,
+                processing => {
                     '$lt' => DateTime->now->subtract_duration(DateTime::Duration->new(seconds => $self->timeout))
                 }
-            }]
+            }],
+            attempt => {
+                '$lte' => $self->retries + 1,
+            },
         },
         update => {
             '$set' => {
-                status => 'Retrieved',
-                retrieved => DateTime->now,
+                processing => DateTime->now,
+                status => $self->processing_status,
             },
             '$inc' => {
                 attempt => 1,
@@ -125,13 +138,22 @@ sub enqueue {
     if($callback) {
         return $self->collection->insert($db_job => sub {
             my ($collection, $error, $oid) = @_;
+            if($error) {
+                $self->emit_safe(error => qq{Error inserting job into collection: $error});
+                return;
+            }
             $db_job->{_id} = $oid;
             $self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
-            $callback->($db_job);
+            eval {
+                $callback->($db_job);
+                return 1;
+            } or $self->emit_safe(error => qq{Error in callback: $@});
         });
     } else {
-        my $id = $self->collection->insert($db_job);
-        $db_job->{_id} = $id;
+        eval {
+            $db_job->{_id} = $self->collection->insert($db_job);
+            return 1;
+        } or croak qq{Error inserting job into collection: $@};
         $self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
         return $db_job;
     }
@@ -198,7 +220,7 @@ sub _watch_nonblocking {
 sub requeue {
     my ($self, $job, $callback) = @_;
 
-    $job->{status} = 'Pending';
+    $job->{status} = ref($self->pending_status) eq 'ARRAY' ? $self->pending_status->[0] : $self->pending_status;
     return $self->update($job, $callback);
 }
 
@@ -314,6 +336,13 @@ sub _consume_blocking {
         my $doc = $self->collection->find_and_modify($opts);
         $self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 
+        if($doc && $doc->{attempt} > $self->retries) {
+            $doc->{status} = $self->failed_status;
+            $self->update($doc);
+            $doc = undef;
+            $self->log->debug("Job exceeded retries, status set to failed and job abandoned");
+        }
+
         if($doc) {
             $self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
             return $doc;
@@ -334,10 +363,20 @@ sub _consume_nonblocking {
         my ($cursor, $err, $doc) = @_;
         $self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
         
+        if($doc && $doc->{attempt} > $self->retries) {
+            $doc->{status} = $self->failed_status;
+            $self->update($doc);
+            $doc = undef;
+            $self->log->debug("Job exceeded retries, status set to failed and job abandoned");
+        }
+
         if($doc) {
             $self->delay->reset;
             $self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
-            $callback->($doc);
+            eval {
+                $callback->($doc);
+                return 1;
+            } or $self->emit_safe(error => "Error in callback: $@");
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
@@ -481,11 +520,36 @@ The L<Mango::Collection> representing the MongoDB queue collection.
 The L<MangoX::Queue::Delay> responsible for dynamically controlling the
 delay between queue queries.
 
+=head2 failed_status
+
+    my $status = $queue->failed_status;
+
+    $queue->failed_status('Failed');
+    
+The status to set failed jobs to (when exceeding retries).
+
+=head2 pending_status
+
+    my $status = $queue->pending_status;
+
+    $queue->pending_status('Pending');
+    $queue->pending_status(['Pending', 'Queued']);
+
+The pending status used to find new jobs on the queue.
+
 =head2 plugins
 
     my $plugins = $queue->plugins;
 
 Returns a hash containing the plugins registered with this queue.
+
+=head2 processing_status
+
+    my $status = $queue->processing_status;
+
+    $queue->processing_status('Processing');
+    
+The status to set jobs to when consumed from the queue.
 
 =head2 retries
 
@@ -570,7 +634,7 @@ Dequeues a job. Currently removes it from the collection.
     my $id = enqueue $queue [ 'some', 'data' ];
     my $id = enqueue $queue +{ foo => 'bar' };
 
-Add an item to the queue in blocking mode.
+Add an item to the queue in blocking mode. The default priority is 1 and status is 'Pending'.
 
 You can set queue options including priority, created and status.
 
@@ -593,6 +657,8 @@ For non-blocking mode, pass in a coderef as the final argument.
     } => sub {
         # ...
     };
+
+Sets the status to 'Pending' by default.
 
 =head2 fetch
 
@@ -624,7 +690,7 @@ Gets a job from the queue by ID. Doesn't change the job status.
 
 You can also pass in a job instead of an ID.
 
-    my $job = get $queue $job;
+    $job = get $queue $job;
 
 =head2 get_options
 
@@ -632,8 +698,6 @@ You can also pass in a job instead of an ID.
 
 Returns the L<Mango::Collection> options hash used by find_and_modify to
 identify and update available queue items.
-
-Wait for a job to enter a certain status.
 
 =head2 release
 
@@ -660,6 +724,8 @@ Requeues a job. Sets the job status to 'Pending'.
 Updates a job in the queue.
 
 =head2 watch
+
+Wait for a job to enter a certain status.
 
     # In blocking mode
     my $id = enqueue $queue 'test';
