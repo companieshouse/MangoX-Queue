@@ -8,7 +8,7 @@ use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
 use DateTime::Tiny;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
@@ -76,46 +76,28 @@ sub plugin {
 sub get_options {
     my ($self) = @_;
 
-    my %opts = ();
-
-    $opts{query} = {
-        '$or' => [{
-            status => {
-                '$in' => ref($self->{pending_status}) eq 'ARRAY' ? $self->{pending_status} : [ $self->{pending_status} ],
-            },
-            '$or' => [ { processing => 0 }, { processing => undef } ],
-        },{
-            status => $self->{processing_status},
-            processing => {
-                '$lt' => time - $self->timeout,
-            }
-        }],
-        attempt => {
-            '$lte' => $self->retries + 1,
-        },
-    };
-
-    $opts{sort} = bson_doc( # Sort by priority, then in order of creation
-        'priority' => 1,
-        'created' => -1,
-    );
-
-    $opts{new} = 0;
-
-    if($self->capped) {
-        # Capped collections can't increase in size, so we cheat with the data structure
-        $opts{update} = {
-            '$set' => {
-                processing => 1,
-                created => DateTime::Tiny->now,
+    return {
+        query => {
+            '$or' => [{
+                status => {
+                    '$in' => ref($self->{pending_status}) eq 'ARRAY' ? $self->{pending_status} : [ $self->{pending_status} ],
+                },
+                '$or' => [ { processing => 0 }, { processing => undef } ],
+            },{
                 status => $self->{processing_status},
+                processing => {
+                    '$lt' => time - $self->timeout,
+                }
+            }],
+            attempt => {
+                '$lte' => $self->retries + 1,
             },
-            '$inc' => {
-                attempt => 1,
-            }
-        };
-    } else {
-        $opts{update} = {
+        },
+        sort => bson_doc( # Sort by priority, then in order of creation
+            'priority' => 1,
+            'created' => -1,
+        ),
+        update => {
             '$set' => {
                 processing => time,
                 status => $self->{processing_status},
@@ -123,10 +105,8 @@ sub get_options {
             '$inc' => {
                 attempt => 1,
             }
-        };
-    }
-
-    return \%opts;
+        }
+    };
 }
 
 sub enqueue {
