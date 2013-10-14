@@ -18,6 +18,8 @@ has 'log' => sub { Mojo::Log->new->level('error') };
 
 # The Mango::Collection representing the queue
 has 'collection';
+has 'capped';
+has 'stats';
 
 # A MangoX::Queue::Delay
 has 'delay' => sub { MangoX::Queue::Delay->new };
@@ -35,18 +37,21 @@ has 'consumers' => sub { {} };
 has 'plugins' => sub { {} };
 
 # Which status should be collected from the queue (can be scalar or array ref)
-has 'pending_status' => sub { 'Pending' };
+has 'pending_status' => sub { shift->capped ? 1 : 'Pending' };
 
 # The status which is set when a job is consumed from the queue
-has 'processing_status' => sub { 'Processing' };
+has 'processing_status' => sub { shift->capped ? 2 : 'Processing' };
 
 # The status to use when a job has failed
-has 'failed_status' => sub { 'Failed' };
+has 'failed_status' => sub { shift->capped ? 3 : 'Failed' };
 
 sub new {
     my $self = shift->SUPER::new(@_);
 
     croak qq{No Mango::Collection provided to constructor} unless ref($self->collection) eq 'Mango::Collection';
+
+    $self->stats($self->collection->stats);
+    $self->capped($self->stats->{capped});
 
     return $self;
 }
@@ -79,24 +84,46 @@ sub plugin {
 sub get_options {
     my ($self) = @_;
 
-    return {
-        query => {
-            '$or' => [{
-                status => {
-                    '$in' => ref($self->pending_status) eq 'ARRAY' ? $self->pending_status : [ $self->pending_status ],
-                },
-                '$or' => [ { processing => 0 }, { processing => undef } ],
-            },{
-                status => $self->processing_status,
-                processing => {
-                    '$lt' => DateTime->now->subtract_duration(DateTime::Duration->new(seconds => $self->timeout))
-                }
-            }],
-            attempt => {
-                '$lte' => $self->retries + 1,
+    my %opts = ();
+
+    $opts{query} = {
+        '$or' => [{
+            status => {
+                '$in' => ref($self->pending_status) eq 'ARRAY' ? $self->pending_status : [ $self->pending_status ],
             },
+            '$or' => [ { processing => 0 }, { processing => undef } ],
+        },{
+            status => $self->processing_status,
+            processing => {
+                '$lt' => DateTime->now->subtract_duration(DateTime::Duration->new(seconds => $self->timeout))
+            }
+        }],
+        attempt => {
+            '$lte' => $self->retries + 1,
         },
-        update => {
+    };
+
+    $opts{sort} = bson_doc( # Sort by priority, then in order of creation
+        'priority' => 1,
+        'created' => -1,
+    );
+
+    $opts{new} = 0;
+
+    if($self->capped) {
+        # Capped collections can't increase in size, so we cheat with the data structure
+        $opts{update} = {
+            '$set' => {
+                processing => 1,
+                created => DateTime->now,
+                status => $self->processing_status,
+            },
+            '$inc' => {
+                attempt => 1,
+            }
+        };
+    } else {
+        $opts{update} = {
             '$set' => {
                 processing => DateTime->now,
                 status => $self->processing_status,
@@ -104,13 +131,10 @@ sub get_options {
             '$inc' => {
                 attempt => 1,
             }
-        },
-        sort => bson_doc( # Sort by priority, then in order of creation
-            'priority' => 1,
-            'created' => -1,
-        ),
-        new => 0, # Get the original object (so we can see status etc)
-    };
+        };
+    }
+
+    return \%opts;
 }
 
 sub enqueue {
@@ -131,8 +155,9 @@ sub enqueue {
         priority => $args{priority} // 1,
         created => $args{created} // DateTime->now,
         data => $job,
-        status => $args{status} // 'Pending',
+        status => $args{status} // $self->pending_status,
         attempt => 1,
+        processing => 0,
     };
 
     if($callback) {
@@ -263,10 +288,14 @@ sub update {
     if($callback) {
         return $self->collection->find_one({'_id' => $job->{_id}} => sub {
             my ($collection, $error, $doc) = @_;
+            if($error) {
+                $self->emit_safe(error => $error);
+                return;
+            }
             $callback->($doc);
         });
     } else {
-        return $self->collection->update({'_id' => $job->{_id}}, $job, {upsert => 1});
+        return $self->collection->update({'_id' => $job->{_id}}, $job, {upsert => 1}) or croak qq{Error updating collection: $@};
     }
 }
 
@@ -323,7 +352,7 @@ sub release {
     Mojo::IOLoop->remove($self->consumers->{$consumer_id});
     delete $self->consumers->{$consumer_id};
 
-    return;
+    return 1;
 }
 
 sub _consume_blocking {
@@ -362,6 +391,11 @@ sub _consume_nonblocking {
     $self->collection->find_and_modify($opts => sub {
         my ($cursor, $err, $doc) = @_;
         $self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
+
+        if($err) {
+            $self->log->error($err);
+            $self->emit_safe(error => $err);
+        }
         
         if($doc && $doc->{attempt} > $self->retries) {
             $doc->{status} = $self->failed_status;
@@ -380,14 +414,16 @@ sub _consume_nonblocking {
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
-            $self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
+            #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
+            $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
             $self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
         } else {
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             $self->delay->wait(sub {
                 return unless exists $self->consumers->{$consumer_id};
-                $self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
+                #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
+                $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
                 $self->log->debug("Timer rescheduled (recursive delayed), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
             });
             return undef;
