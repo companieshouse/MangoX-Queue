@@ -2,8 +2,6 @@ package MangoX::Queue::Job;
 
 use Mojo::Base -base;
 
-use Carp;
-
 has 'on_finish' => sub {};
 
 sub finish
