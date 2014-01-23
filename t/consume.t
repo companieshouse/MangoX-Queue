@@ -2,6 +2,7 @@
 
 use strict;
 use warnings;
+use v5.10;
 
 use Mango;
 use MangoX::Queue;
@@ -18,6 +19,7 @@ my $queue = MangoX::Queue->new(collection => $collection);
 test_nonblocking_consume();
 test_blocking_consume();
 test_custom_consume();
+test_job_max_reached();
 
 sub test_nonblocking_consume {
 	enqueue $queue '82365';
@@ -85,6 +87,51 @@ sub test_custom_consume {
 	});
 
 	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+}
+
+sub test_job_max_reached {
+	my $queue_job_max_backup = $queue->job_max;
+	my $done = {};
+	my $consumer_id;
+
+	$queue->job_max(2);
+	$queue->enqueue($_) for (1..3);
+
+	$consumer_id = consume $queue sub {
+		my ($job) = @_;
+
+		$done->{"job$job->{data}"} = 1;
+		say("*** got job$job->{data}");
+		#$job->finish;
+	};
+
+	$queue->once(job_max_reached => sub {
+		say("*** got job3");
+		$done->{job3} = 1;
+	});
+
+	Mojo::IOLoop->timer(0 => sub { _wait_test_job_max_reached($consumer_id, $done); });
+
+	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+
+	ok($done->{job1}, 'Found job1 in non-blocking consume');
+	ok($done->{job2}, 'Found job2 in non-blocking consume');
+	ok($done->{job3}, 'Maximum number of jobs reached while trying to consume job3');
+
+	$queue->job_max($queue_job_max_backup);
+}
+
+sub _wait_test_job_max_reached {
+	my ($consumer_id, $done) = @_;
+	#say(Dumper($done));
+
+	if (keys(%$done) >= 3) {
+		$queue->release($consumer_id);
+		Mojo::IOLoop->stop;
+	}
+	else {
+		Mojo::IOLoop->timer(0 => sub { _wait_test_job_max_reached($consumer_id, $done); });
+	}
 }
 
 done_testing;

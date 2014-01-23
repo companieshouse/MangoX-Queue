@@ -6,9 +6,10 @@ use Carp 'croak';
 use Mojo::Log;
 use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
+use MangoX::Queue::Job;
 use DateTime::Tiny;
 
-our $VERSION = '0.08';
+our $VERSION = '0.09-dev';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
@@ -26,6 +27,12 @@ has 'timeout' => sub { $ENV{MANGOX_QUEUE_JOB_TIMEOUT} // 60 };
 
 # How many times to retry a job before giving up
 has 'retries' => sub { $ENV{MANGOX_QUEUE_JOB_RETRIES} // 5 };
+
+# Current number of jobs that have been consumed but not yet completed
+has 'job_count' => sub { 0 };
+
+# Maximum number of jobs allowed to be in a consumed state at any one time
+has 'job_max' => sub { 10 };
 
 # Store Mojo::IOLoop->timer IDs
 has 'consumers' => sub { {} };
@@ -370,6 +377,20 @@ sub _consume_blocking {
 sub _consume_nonblocking {
     my ($self, $args, $consumer_id, $callback, $fetch) = @_;
 
+    # Don't all consumption if job_count has been reached
+    if ($self->job_count >= $self->job_max) {
+        return unless Mojo::IOLoop->is_running;
+        $self->emit_safe(job_max_reached => $self->job_max) if ($self->has_subscribers('job_max_reached'));
+
+        $self->delay->wait(sub {
+            return unless (exists($self->consumers->{$consumer_id}));
+            $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
+            $self->log->debug("Timer rescheduled (job_count limit reached), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
+        });
+
+        return;
+    }
+
     my $opts = $self->get_options;
     $opts->{query} = $args if scalar keys %$args;
 
@@ -390,10 +411,16 @@ sub _consume_nonblocking {
         }
 
         if($doc) {
+            # Increment job_count
+            $self->job_count($self->job_count + 1);
+
             $self->delay->reset;
             $self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
             eval {
-                $callback->($doc);
+                $callback->(MangoX::Queue::Job->new($doc)->on_finish(sub {
+                    $self->job_count($self->job_count - 1);
+                }));
+
                 return 1;
             } or $self->emit_safe(error => "Error in callback: $@");
             return unless Mojo::IOLoop->is_running;
