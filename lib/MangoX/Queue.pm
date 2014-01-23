@@ -377,7 +377,7 @@ sub _consume_blocking {
 sub _consume_nonblocking {
     my ($self, $args, $consumer_id, $callback, $fetch) = @_;
 
-    # Don't all consumption if job_count has been reached
+    # Don't allow consumption if job_count has been reached
     if ($self->job_count >= $self->job_max) {
         return unless Mojo::IOLoop->is_running;
         $self->emit_safe(job_max_reached => $self->job_max) if ($self->has_subscribers('job_max_reached'));

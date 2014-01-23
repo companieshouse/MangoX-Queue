@@ -91,46 +91,62 @@ sub test_custom_consume {
 
 sub test_job_max_reached {
 	my $queue_job_max_backup = $queue->job_max;
-	my $done = {};
+	my $jobs = [];
+	my $consumed_job_count = 0;
+	my $job_max_reached_flag;
 	my $consumer_id;
 
-	$queue->job_max(2);
-	$queue->enqueue($_) for (1..3);
+	$queue->job_max(5);
 
+	# Enqueue 10 dummy jobs
+	$queue->enqueue($_) for (1..10);
+
+	# Start consuming jobs
 	$consumer_id = consume $queue sub {
 		my ($job) = @_;
 
-		$done->{"job$job->{data}"} = 1;
-		say("*** got job$job->{data}");
-		#$job->finish;
+		$consumed_job_count++;
+
+		# Push jobs to array so we can finish() them later
+		push(@$jobs, $job);
 	};
 
-	$queue->once(job_max_reached => sub {
-		say("*** got job3");
-		$done->{job3} = 1;
+	# Subscribe to the 'job_max_reached' event so we know when consuming has paused
+	$queue->on(job_max_reached => sub {
+		$job_max_reached_flag = 1;
+
+		# Finish the jobs previously stored in the array
+		while (my $job = shift(@$jobs)) {
+			$job->finish;
+		}
 	});
 
-	Mojo::IOLoop->timer(0 => sub { _wait_test_job_max_reached($consumer_id, $done); });
-
+	# Start waiting for all jobs to finish
+	Mojo::IOLoop->timer(0 => sub { _wait_test_job_max_reached($queue, $consumer_id, \$consumed_job_count, $jobs); });
 	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 
-	ok($done->{job1}, 'Found job1 in non-blocking consume');
-	ok($done->{job2}, 'Found job2 in non-blocking consume');
-	ok($done->{job3}, 'Maximum number of jobs reached while trying to consume job3');
+	ok($consumed_job_count == 10, 'consumed_job_count == 10');
+	ok($job_max_reached_flag, 'job_max was reached');
 
 	$queue->job_max($queue_job_max_backup);
 }
 
 sub _wait_test_job_max_reached {
-	my ($consumer_id, $done) = @_;
-	#say(Dumper($done));
+	my ($queue, $consumer_id, $consumed_job_count, $jobs) = @_;
 
-	if (keys(%$done) >= 3) {
+	if ($$consumed_job_count == 10) {
+		# Make sure there are no un-finished jobs
+		while (my $job = shift(@$jobs)) {
+			$job->finish;
+		}
+
 		$queue->release($consumer_id);
 		Mojo::IOLoop->stop;
 	}
 	else {
-		Mojo::IOLoop->timer(0 => sub { _wait_test_job_max_reached($consumer_id, $done); });
+		$queue->delay->wait(sub {
+			_wait_test_job_max_reached($queue, $consumer_id, $consumed_job_count, $jobs);
+		});
 	}
 }
 
