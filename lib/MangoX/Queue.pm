@@ -573,7 +573,7 @@ delay between queue queries.
 
 =head2 concurrent_job_limit
 
-    my $job_count = $queue->concurrent_job_limit;
+    my $concurrent_job_limit = $queue->concurrent_job_limit;
     $queue->concurrent_job_limit(20);
 
 The maximum number of concurrent jobs (jobs consumed from the queue and unfinished). Defaults to 10.
