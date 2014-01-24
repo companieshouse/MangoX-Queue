@@ -571,6 +571,15 @@ The L<Mango::Collection> representing the MongoDB queue collection.
 The L<MangoX::Queue::Delay> responsible for dynamically controlling the
 delay between queue queries.
 
+=head2 job_max
+
+    my $job_count = $queue->job_max;
+    $queue->job_max(20);
+
+The maximum number of concurrent jobs (jobs consumed from the queue and unfinished). Defaults to 10.
+
+This only applies to jobs on the queue in non-blocking mode. L<MangoX::Queue> has an internal counter that is incremented when a job has been consumed from the queue (in non-blocking mode). The job returned is a L<MangoX::Queue::Job> instance and has a L<finish|MangoX::Queue::Job/finish> method that should be called to decrement the internal counter. See L<MangoX::Queue::Job> for more details.
+
 =head2 plugins
 
     my $plugins = $queue->plugins;
@@ -625,6 +634,15 @@ Emitted when an item is dequeued
     };
 
 Emitted when an item is enqueued
+
+=head2 job_max_reached
+
+    on $queue enqueued => sub {
+        my ($queue, $job_max) = @_;
+        # ...
+    };
+
+Emitted when something attempts to consume a job from the queue, and the current L</job_max> limit has been reached.
 
 =head1 METHODS
 
@@ -788,5 +806,13 @@ you can check for an error argument to the callback sub:
 =head1 SEE ALSO
 
 L<MangoX::Queue::Tutorial>, L<Mojolicious>, L<Mango>
+
+=head1 CONTRIBUTORS
+
+=over
+
+=item Ben Vinnerd, ben@vinnerd.com
+
+=back
 
 =cut
