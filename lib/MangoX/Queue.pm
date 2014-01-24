@@ -32,7 +32,7 @@ has 'retries' => sub { $ENV{MANGOX_QUEUE_JOB_RETRIES} // 5 };
 has 'job_count' => sub { 0 };
 
 # Maximum number of jobs allowed to be in a consumed state at any one time
-has 'job_max' => sub { 10 };
+has 'concurrent_job_limit' => sub { 10 };
 
 # Store Mojo::IOLoop->timer IDs
 has 'consumers' => sub { {} };
@@ -378,9 +378,9 @@ sub _consume_nonblocking {
     my ($self, $args, $consumer_id, $callback, $fetch) = @_;
 
     # Don't allow consumption if job_count has been reached
-    if ($self->job_count >= $self->job_max) {
+    if ($self->job_count >= $self->concurrent_job_limit) {
         return unless Mojo::IOLoop->is_running;
-        $self->emit_safe(job_max_reached => $self->job_max) if ($self->has_subscribers('job_max_reached'));
+        $self->emit_safe(concurrent_job_limit_reached => $self->concurrent_job_limit) if ($self->has_subscribers('concurrent_job_limit_reached'));
 
         $self->delay->wait(sub {
             return unless (exists($self->consumers->{$consumer_id}));
@@ -571,10 +571,10 @@ The L<Mango::Collection> representing the MongoDB queue collection.
 The L<MangoX::Queue::Delay> responsible for dynamically controlling the
 delay between queue queries.
 
-=head2 job_max
+=head2 concurrent_job_limit
 
-    my $job_count = $queue->job_max;
-    $queue->job_max(20);
+    my $job_count = $queue->concurrent_job_limit;
+    $queue->concurrent_job_limit(20);
 
 The maximum number of concurrent jobs (jobs consumed from the queue and unfinished). Defaults to 10.
 
@@ -635,14 +635,14 @@ Emitted when an item is dequeued
 
 Emitted when an item is enqueued
 
-=head2 job_max_reached
+=head2 concurrent_job_limit_reached
 
     on $queue enqueued => sub {
-        my ($queue, $job_max) = @_;
+        my ($queue, $concurrent_job_limit) = @_;
         # ...
     };
 
-Emitted when something attempts to consume a job from the queue, and the current L</job_max> limit has been reached.
+Emitted when something attempts to consume a job from the queue, and the current L</concurrent_job_limit> limit has been reached.
 
 =head1 METHODS
 

@@ -19,7 +19,7 @@ my $queue = MangoX::Queue->new(collection => $collection);
 test_nonblocking_consume();
 test_blocking_consume();
 test_custom_consume();
-test_job_max_reached();
+test_concurrent_job_limit_reached();
 
 sub test_nonblocking_consume {
 	enqueue $queue '82365';
@@ -89,14 +89,14 @@ sub test_custom_consume {
 	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 }
 
-sub test_job_max_reached {
-	my $queue_job_max_backup = $queue->job_max;
+sub test_concurrent_job_limit_reached {
+	my $queue_concurrent_job_limit_backup = $queue->concurrent_job_limit;
 	my $jobs = [];
 	my $consumed_job_count = 0;
-	my $job_max_reached_flag;
+	my $concurrent_job_limit_reached_flag;
 	my $consumer_id;
 
-	$queue->job_max(5);
+	$queue->concurrent_job_limit(5);
 
 	# Enqueue 10 dummy jobs
 	$queue->enqueue($_) for (1..10);
@@ -111,9 +111,9 @@ sub test_job_max_reached {
 		push(@$jobs, $job);
 	};
 
-	# Subscribe to the 'job_max_reached' event so we know when consuming has paused
-	$queue->on(job_max_reached => sub {
-		$job_max_reached_flag = 1;
+	# Subscribe to the 'concurrent_job_limit_reached' event so we know when consuming has paused
+	$queue->on(concurrent_job_limit_reached => sub {
+		$concurrent_job_limit_reached_flag = 1;
 
 		# Finish the jobs previously stored in the array
 		while (my $job = shift(@$jobs)) {
@@ -122,16 +122,16 @@ sub test_job_max_reached {
 	});
 
 	# Start waiting for all jobs to finish
-	Mojo::IOLoop->timer(0 => sub { _wait_test_job_max_reached($queue, $consumer_id, \$consumed_job_count, $jobs); });
+	Mojo::IOLoop->timer(0 => sub { _wait_test_concurrent_job_limit_reached($queue, $consumer_id, \$consumed_job_count, $jobs); });
 	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 
 	ok($consumed_job_count == 10, 'consumed_job_count == 10');
-	ok($job_max_reached_flag, 'job_max was reached');
+	ok($concurrent_job_limit_reached_flag, 'concurrent_job_limit was reached');
 
-	$queue->job_max($queue_job_max_backup);
+	$queue->concurrent_job_limit($queue_concurrent_job_limit_backup);
 }
 
-sub _wait_test_job_max_reached {
+sub _wait_test_concurrent_job_limit_reached {
 	my ($queue, $consumer_id, $consumed_job_count, $jobs) = @_;
 
 	if ($$consumed_job_count == 10) {
@@ -145,7 +145,7 @@ sub _wait_test_job_max_reached {
 	}
 	else {
 		$queue->delay->wait(sub {
-			_wait_test_job_max_reached($queue, $consumer_id, $consumed_job_count, $jobs);
+			_wait_test_concurrent_job_limit_reached($queue, $consumer_id, $consumed_job_count, $jobs);
 		});
 	}
 }
