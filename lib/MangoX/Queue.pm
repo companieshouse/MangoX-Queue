@@ -578,7 +578,10 @@ delay between queue queries.
 
 The maximum number of concurrent jobs (jobs consumed from the queue and unfinished). Defaults to 10.
 
-This only applies to jobs on the queue in non-blocking mode. L<MangoX::Queue> has an internal counter that is incremented when a job has been consumed from the queue (in non-blocking mode). The job returned is a L<MangoX::Queue::Job> instance and has a L<finish|MangoX::Queue::Job/finish> method that should be called to decrement the internal counter. See L<MangoX::Queue::Job> for more details.
+This only applies to jobs on the queue in non-blocking mode. L<MangoX::Queue> has an internal counter
+that is incremented when a job has been consumed from the queue (in non-blocking mode). The job
+returned is a L<MangoX::Queue::Job> instance and has a L<finish|MangoX::Queue::Job/finish> method
+that should be called to decrement the internal counter. See L<MangoX::Queue::Job> for more details.
 
 =head2 plugins
 
@@ -642,7 +645,8 @@ Emitted when an item is enqueued
         # ...
     };
 
-Emitted when something attempts to consume a job from the queue, and the current L</concurrent_job_limit> limit has been reached.
+Emitted when something attempts to consume a job from the queue, and the current 
+</concurrent_job_limit> limit has been reached.
 
 =head1 METHODS
 
@@ -661,7 +665,8 @@ L<MangoX::Queue> implements the following methods.
         # ...
     };
 
-Waits for jobs to arrive on the queue, sleeping between queue checks using L<MangoX::Queue::Delay> or L<Mojo::IOLoop>.
+Waits for jobs to arrive on the queue, sleeping between queue checks using
+L<MangoX::Queue::Delay> or L<Mojo::IOLoop>.
 
 Currently sets the status to 'Retrieved' before returning the job.
 
