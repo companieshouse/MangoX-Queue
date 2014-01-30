@@ -29,10 +29,10 @@ has 'timeout' => sub { $ENV{MANGOX_QUEUE_JOB_TIMEOUT} // 60 };
 has 'retries' => sub { $ENV{MANGOX_QUEUE_JOB_RETRIES} // 5 };
 
 # Current number of jobs that have been consumed but not yet completed
-has 'job_count' => sub { 0 };
+has 'job_count' => 0;
 
 # Maximum number of jobs allowed to be in a consumed state at any one time
-has 'concurrent_job_limit' => sub { 10 };
+has 'concurrent_job_limit' => 10;
 
 # Store Mojo::IOLoop->timer IDs
 has 'consumers' => sub { {} };
@@ -381,14 +381,19 @@ sub _consume_nonblocking {
     if ($self->job_count >= $self->concurrent_job_limit) {
         return unless Mojo::IOLoop->is_running;
         $self->emit_safe(concurrent_job_limit_reached => $self->concurrent_job_limit) if ($self->has_subscribers('concurrent_job_limit_reached'));
+        $self->log->debug("concurrent_job_limit_reached = " . $self->concurrent_job_limit);
+        return unless (exists($self->consumers->{$consumer_id}));
 
         $self->delay->wait(sub {
-            return unless (exists($self->consumers->{$consumer_id}));
             $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
-            $self->log->debug("Timer rescheduled (job_count limit reached), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
         });
 
+        $self->log->debug("Timer rescheduled (job_count limit reached), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
+
         return;
+    }
+    else {
+        $self->log->debug("job_count: " . $self->job_count . '/' . $self->concurrent_job_limit);
     }
 
     my $opts = $self->get_options;
@@ -413,13 +418,16 @@ sub _consume_nonblocking {
         if($doc) {
             # Increment job_count
             $self->job_count($self->job_count + 1);
+            $self->log->debug("job_count incremented to " . $self->job_count);
 
             $self->delay->reset;
             $self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
+
             eval {
-                $callback->(MangoX::Queue::Job->new($doc)->on_finish(sub {
-                    $self->job_count($self->job_count - 1);
-                }));
+                my $job = new MangoX::Queue::Job($doc);
+                $job->queue($self);
+
+                $callback->($job);
 
                 return 1;
             } or $self->emit_safe(error => "Error in callback: $@");
@@ -427,7 +435,7 @@ sub _consume_nonblocking {
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
             #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
-            $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
+            Mojo::IOLoop->timer(0.1, sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0); });
             $self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
         } else {
             return unless Mojo::IOLoop->is_running;
@@ -436,8 +444,8 @@ sub _consume_nonblocking {
                 return unless exists $self->consumers->{$consumer_id};
                 #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
                 $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
-                $self->log->debug("Timer rescheduled (recursive delayed), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
             });
+            $self->log->debug("Timer rescheduled (recursive delayed), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
             return undef;
         }
     });

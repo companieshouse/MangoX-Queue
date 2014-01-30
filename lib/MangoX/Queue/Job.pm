@@ -2,14 +2,16 @@ package MangoX::Queue::Job;
 
 use Mojo::Base -base;
 
-has 'on_finish' => sub {};
+has 'queue' => sub { die('queue not defined') };
 
-sub finish
+sub DESTROY
 {
-    shift->on_finish->(@_);
-}
+    my $self = shift;
 
-*DESTROY = \&finish;
+    $self->queue->job_count($self->queue->job_count - 1);
+
+    return;
+}
 
 1;
 

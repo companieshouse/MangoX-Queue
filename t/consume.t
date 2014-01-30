@@ -96,7 +96,9 @@ sub test_concurrent_job_limit_reached {
 	my $concurrent_job_limit_reached_flag;
 	my $consumer_id;
 
+	is($queue->concurrent_job_limit, 10, 'concurrent_job_limit is the default (10)');
 	$queue->concurrent_job_limit(5);
+	is($queue->concurrent_job_limit, 5, 'concurrent_job_limit changed to 5');
 
 	# Enqueue 10 dummy jobs
 	$queue->enqueue($_) for (1..10);
@@ -116,9 +118,7 @@ sub test_concurrent_job_limit_reached {
 		$concurrent_job_limit_reached_flag = 1;
 
 		# Finish the jobs previously stored in the array
-		while (my $job = shift(@$jobs)) {
-			$job->finish;
-		}
+		while (shift(@$jobs)) {};
 	});
 
 	# Start waiting for all jobs to finish
@@ -136,9 +136,7 @@ sub _wait_test_concurrent_job_limit_reached {
 
 	if ($$consumed_job_count == 10) {
 		# Make sure there are no un-finished jobs
-		while (my $job = shift(@$jobs)) {
-			$job->finish;
-		}
+		while (shift(@$jobs)) {};
 
 		$queue->release($consumer_id);
 		Mojo::IOLoop->stop;
