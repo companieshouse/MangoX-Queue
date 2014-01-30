@@ -432,6 +432,7 @@ sub _consume_nonblocking {
             eval {
                 my $job = new MangoX::Queue::Job($doc);
                 $job->queue($self);
+                $self->log->debug('Job created, type: ' . ($job->{data}->{type} // '*unknown*'));
 
                 $callback->($job);
 
@@ -441,7 +442,7 @@ sub _consume_nonblocking {
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
             #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
-            Mojo::IOLoop->timer(0.001, sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0); });
+            Mojo::IOLoop->timer(0, sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0); });
             $self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
         } else {
             return unless Mojo::IOLoop->is_running;
