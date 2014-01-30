@@ -24,8 +24,8 @@ MangoX::Queue::Job - A job consumed from L<MangoX::Queue>
 =head1 DESCRIPTION
 
 L<MangoX::Queue::Job> is an object representing a job that has been consumed from L<MangoX::Queue>.
-The object is just a document/job retrieved from the queue that is blessed, with some added
-methods (see L<METHODS>).
+The object is just a document/job retrieved from the queue that is blessed, with an added desructor
+method.
 
 This class is used internally by L<MangoX::Queue>
 
@@ -39,29 +39,25 @@ This class is used internally by L<MangoX::Queue>
         $self->job_count($self->job_count - 1);
     }));
 
-    $job->finish;
+    undef($job); # or let $job fall out of scope/refcount to 0
 
 =head1 ATTRIBUTES
 
 L<MangoX::Queue::Job> implements the following attributes:
 
-=head2 on_finish
+=head2 queue
 
-    $job->on_finish(sub{ ... });
+    $job->queue($queue);
 
-The code called when L</finish> is called. Defaults to C<sub {}>, i.e. do nothing, but
-L<MangoX::Queue> should set this to be CODE that decrements L<job_count|MangoX::Queue/job_count>
+Holds the L<MangoX::Queue> instance that L<MangoX::Queue::Job> belongs to. It must be set when the job is created.
 
 =head1 METHODS
 
 L<MangoX::Queue::Job> implements the following methods:
 
-=head2 finish
+=head2 DESTROY
 
-    $job->finish;
-
-Calls the code previously passed to </on_finish>. This is called automatically when C<$job> goes
-out of scope, gets set to something else, or gets DESTROYed.
+Called automatically when C<$job> goes out of scope, undef'd, or refcount goes to 0.
 
 =head1 SEE ALSO
 

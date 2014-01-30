@@ -441,7 +441,7 @@ sub _consume_nonblocking {
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
             #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
-            Mojo::IOLoop->timer(0.1, sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0); });
+            Mojo::IOLoop->timer(0.001, sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0); });
             $self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
         } else {
             return unless Mojo::IOLoop->is_running;
@@ -594,8 +594,8 @@ The maximum number of concurrent jobs (jobs consumed from the queue and unfinish
 
 This only applies to jobs on the queue in non-blocking mode. L<MangoX::Queue> has an internal counter
 that is incremented when a job has been consumed from the queue (in non-blocking mode). The job
-returned is a L<MangoX::Queue::Job> instance and has a L<finish|MangoX::Queue::Job/finish> method
-that should be called to decrement the internal counter. See L<MangoX::Queue::Job> for more details.
+returned is a L<MangoX::Queue::Job> instance and has a descructor method that is called to decrement
+the internal counter. See L<MangoX::Queue::Job> for more details.
 
 =head2 plugins
 
