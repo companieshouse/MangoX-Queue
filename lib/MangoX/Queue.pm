@@ -432,7 +432,6 @@ sub _consume_nonblocking {
             eval {
                 my $job = new MangoX::Queue::Job($doc);
                 $job->queue($self);
-                $self->log->debug('Job created, type: ' . ($job->{data}->{type} // '*unknown*'));
 
                 $callback->($job);
 
