@@ -9,6 +9,7 @@ sub DESTROY
     my $self = shift;
 
     $self->queue->job_count($self->queue->job_count - 1);
+    warn("job_count DECremented to " . $self->queue->job_count . " (job type: " . $self->{data}->{type} . ")");
 
     return;
 }
@@ -33,11 +34,10 @@ This class is used internally by L<MangoX::Queue>
 
     use MangoX::Queue::Job;
 
-    my $doc = {foo => 'bar', ...};
+    my $doc = {...};
 
-    my $job = MangoX::Queue::Job->new($doc)->on_finish(sub {
-        $self->job_count($self->job_count - 1);
-    }));
+    my $job = new MangoX::Queue::Job($doc);
+    $job->queue($queue);
 
     undef($job); # or let $job fall out of scope/refcount to 0
 

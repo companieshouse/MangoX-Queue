@@ -432,6 +432,7 @@ sub _consume_nonblocking {
             eval {
                 my $job = new MangoX::Queue::Job($doc);
                 $job->queue($self);
+                warn("job_count INCremented to " . $self->job_count . " (job type: " . $job->{data}->{type} . ")");
 
                 $callback->($job);
 
