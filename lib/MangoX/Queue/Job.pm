@@ -9,7 +9,6 @@ sub DESTROY
     my $self = shift;
 
     $self->queue->job_count($self->queue->job_count - 1);
-    warn("job_count DECremented to " . $self->queue->job_count . " (job type: " . $self->{data}->{type} . ")");
 
     return;
 }
