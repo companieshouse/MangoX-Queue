@@ -383,23 +383,24 @@ sub _consume_blocking {
 sub _consume_nonblocking {
     my ($self, $args, $consumer_id, $callback, $fetch) = @_;
 
+    $self->log->debug("Active jobs: " . $self->job_count . '/' . ($self->concurrent_job_limit < 0 ? '*' : $self->concurrent_job_limit));
+
     # Don't allow consumption if job_count has been reached
-    if ($self->job_count >= $self->concurrent_job_limit) {
+    if ($self->concurrent_job_limit > -1 && $self->job_count >= $self->concurrent_job_limit) {
         return unless Mojo::IOLoop->is_running;
-        $self->emit_safe(concurrent_job_limit_reached => $self->concurrent_job_limit) if ($self->has_subscribers('concurrent_job_limit_reached'));
-        $self->log->debug("concurrent_job_limit_reached = " . $self->concurrent_job_limit);
-        return unless (exists($self->consumers->{$consumer_id}));
+        return if $fetch;
+        $self->emit_safe(concurrent_job_limit_reached => $self->concurrent_job_limit) if $self->has_subscribers('concurrent_job_limit_reached');
+        $self->log->debug("concurrent_job_limit_reached = " . $self->concurrent_job_limit . ", job_count = " . $self->job_count);
+        return unless exists $self->consumers->{$consumer_id};
 
         $self->delay->wait(sub {
+            return unless exists $self->consumers->{$consumer_id};
             $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
         });
 
         $self->log->debug("Timer rescheduled (job_count limit reached), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
 
         return;
-    }
-    else {
-        $self->log->debug("job_count: " . $self->job_count . '/' . $self->concurrent_job_limit);
     }
 
     my $opts = $self->get_options;
@@ -422,33 +423,31 @@ sub _consume_nonblocking {
         }
 
         if($doc) {
-            # Increment job_count
             $self->job_count($self->job_count + 1);
             $self->log->debug("job_count incremented to " . $self->job_count);
 
+            my $job = MangoX::Queue::Job->new($doc);
+            $job->queue($self);
+
             $self->delay->reset;
-            $self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
+            $self->emit_safe(consumed => $job) if $self->has_subscribers('consumed');
 
             eval {
-                my $job = new MangoX::Queue::Job($doc);
-                $job->queue($self);
-
                 $callback->($job);
-
                 return 1;
             } or $self->emit_safe(error => "Error in callback: $@");
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
-            #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
-            Mojo::IOLoop->timer(0, sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0); });
+            Mojo::IOLoop->timer(0, sub { 
+                $self->_consume_nonblocking($args, $consumer_id, $callback, 0) }
+            );
             $self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
         } else {
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             $self->delay->wait(sub {
                 return unless exists $self->consumers->{$consumer_id};
-                #$self->consumers->{$consumer_id} = Mojo::IOLoop->timer(0 => sub { $self->_consume_nonblocking($args, $consumer_id, $callback, 0) });
                 $self->_consume_nonblocking($args, $consumer_id, $callback, 0);
             });
             $self->log->debug("Timer rescheduled (recursive delayed), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
@@ -597,6 +596,9 @@ that is incremented when a job has been consumed from the queue (in non-blocking
 returned is a L<MangoX::Queue::Job> instance and has a descructor method that is called to decrement
 the internal counter. See L<MangoX::Queue::Job> for more details.
 
+Set to -1 to disable queue concurrency limits. B<Use with caution>, this could result in
+out of memory errors or an extremely slow event loop.
+
 =head2 plugins
 
     my $plugins = $queue->plugins;
@@ -659,8 +661,7 @@ Emitted when an item is enqueued
         # ...
     };
 
-Emitted when something attempts to consume a job from the queue, and the current 
-</concurrent_job_limit> limit has been reached.
+Emitted when a job is found but the </concurrent_job_limit> limit has been reached.
 
 =head1 METHODS
 
@@ -828,10 +829,6 @@ you can check for an error argument to the callback sub:
         }
     }
 
-=head1 SEE ALSO
-
-L<MangoX::Queue::Tutorial>, L<Mojolicious>, L<Mango>
-
 =head1 CONTRIBUTORS
 
 =over
@@ -839,5 +836,9 @@ L<MangoX::Queue::Tutorial>, L<Mojolicious>, L<Mango>
 =item Ben Vinnerd, ben@vinnerd.com
 
 =back
+
+=head1 SEE ALSO
+
+L<MangoX::Queue::Tutorial>, L<Mojolicious>, L<Mango>
 
 =cut

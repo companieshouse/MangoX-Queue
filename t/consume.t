@@ -19,6 +19,7 @@ my $queue = MangoX::Queue->new(collection => $collection);
 test_nonblocking_consume();
 test_blocking_consume();
 test_custom_consume();
+test_concurrent_job_limit_disabled();
 test_concurrent_job_limit_reached();
 
 sub test_nonblocking_consume {
@@ -70,7 +71,6 @@ sub test_custom_consume {
 	my $consumer_id;
 	$consumer_id = consume $queue status => 'Failed', sub {
 		my ($job) = @_;
-
 		isnt($job, undef, 'Found failed job in non-blocking custom consume');
 
 		release $queue $consumer_id;
@@ -89,7 +89,53 @@ sub test_custom_consume {
 	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 }
 
+sub test_concurrent_job_limit_disabled {
+	my $queue_concurrent_job_limit_backup = $queue->concurrent_job_limit;
+	my $jobs = [];
+	my $consumed_job_count = 0;
+	my $concurrent_job_limit_reached_flag;
+	my $consumer_id;
+
+	$queue->concurrent_job_limit(-1);
+	is($queue->concurrent_job_limit, -1, 'concurrent_job_limit changed to -1');
+
+	# Enqueue 10 dummy jobs
+	$queue->enqueue($_) for (1..10);
+
+	# Start consuming jobs
+	$consumer_id = consume $queue sub {
+		my ($job) = @_;
+
+		$consumed_job_count++;
+
+    # print "IN FIRST CONSUMER\n";
+
+		# Push jobs to array so we can finish() them later
+		push(@$jobs, $job);
+	};
+
+	# Subscribe to the 'concurrent_job_limit_reached' event so we know when consuming has paused
+	my $handler = $queue->on(concurrent_job_limit_reached => sub {
+    ok(0, 'concurrent_job_limit_reached should not have been emitted');
+
+		# Finish the jobs previously stored in the array
+		while (shift(@$jobs)) {};
+	});
+
+	# Start waiting for all jobs to finish
+	Mojo::IOLoop->timer(0 => sub { _wait_test_concurrent_job_limit_reached($queue, $consumer_id, \$consumed_job_count, $jobs); });
+	Mojo::IOLoop->start;
+
+	ok($consumed_job_count == 10, 'consumed_job_count == 10');
+
+  $queue->unsubscribe(concurrent_job_limit_reached => $handler);
+	$queue->concurrent_job_limit($queue_concurrent_job_limit_backup);
+}
+
 sub test_concurrent_job_limit_reached {
+  # TODO without this, somehow the old consumer gets called (from last test)
+  $queue = MangoX::Queue->new(collection => $collection);
+
 	my $queue_concurrent_job_limit_backup = $queue->concurrent_job_limit;
 	my $jobs = [];
 	my $consumed_job_count = 0;
@@ -108,6 +154,7 @@ sub test_concurrent_job_limit_reached {
 		my ($job) = @_;
 
 		$consumed_job_count++;
+    #print "CONSUMED JOB COUNT: $consumed_job_count\n";
 
 		# Push jobs to array so we can finish() them later
 		push(@$jobs, $job);
@@ -117,13 +164,15 @@ sub test_concurrent_job_limit_reached {
 	$queue->on(concurrent_job_limit_reached => sub {
 		$concurrent_job_limit_reached_flag = 1;
 
+    #print "Event fires\n";
+
 		# Finish the jobs previously stored in the array
 		while (shift(@$jobs)) {};
 	});
 
 	# Start waiting for all jobs to finish
-	Mojo::IOLoop->timer(0 => sub { _wait_test_concurrent_job_limit_reached($queue, $consumer_id, \$consumed_job_count, $jobs); });
-	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+	Mojo::IOLoop->timer(0 => sub { _wait_test_concurrent_job_limit_reached($queue, $consumer_id, \$consumed_job_count, $jobs) });
+	Mojo::IOLoop->start;
 
 	ok($consumed_job_count == 10, 'consumed_job_count == 10');
 	ok($concurrent_job_limit_reached_flag, 'concurrent_job_limit was reached');
@@ -138,11 +187,13 @@ sub _wait_test_concurrent_job_limit_reached {
 		# Make sure there are no un-finished jobs
 		while (shift(@$jobs)) {};
 
-		$queue->release($consumer_id);
+    # print "Finished jobs\n";
+
+		release $queue $consumer_id;
 		Mojo::IOLoop->stop;
-	}
-	else {
-		$queue->delay->wait(sub {
+	} else {
+    # print "Waiting: $$consumed_job_count\n";
+	  $queue->delay->wait(sub{
 			_wait_test_concurrent_job_limit_reached($queue, $consumer_id, $consumed_job_count, $jobs);
 		});
 	}

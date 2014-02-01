@@ -8,7 +8,11 @@ sub DESTROY
 {
     my $self = shift;
 
+    $self->queue->log->debug('Job completed and object destroyed');
+
     $self->queue->job_count($self->queue->job_count - 1);
+
+    $self->queue->log->debug('New job count: ' . $self->queue->job_count);
 
     return;
 }
@@ -36,8 +40,7 @@ This class is used internally by L<MangoX::Queue>
     my $doc = {...};
 
     my $job = new MangoX::Queue::Job($doc);
-    $job->queue($queue);
-
+    $job->queue($self);
     undef($job); # or let $job fall out of scope/refcount to 0
 
 =head1 ATTRIBUTES
