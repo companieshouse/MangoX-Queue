@@ -9,7 +9,7 @@ use MangoX::Queue::Delay;
 use MangoX::Queue::Job;
 use DateTime::Tiny;
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
