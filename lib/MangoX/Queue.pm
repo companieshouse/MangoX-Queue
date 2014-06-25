@@ -311,12 +311,8 @@ sub get {
 sub update {
     my ($self, $job, $callback) = @_;
 
-    # FIXME Temporary fix to remove queue item from MangoX::Queue::Job
-    my $j = {};
-    for my $key (keys %$job) {
-        $j->{$key} = $job->{$key} if $key ne 'queue';
-    }
-    $job = $j;
+    # FIXME Temporary fix to remove has_finished indicator from MangoX::Queue::Job
+    $job = { map { $_ => $job->{$_} } grep { $_ ne 'has_finished' } keys %$job };
 
     if($callback) {
         return $self->collection->update({'_id' => $job->{_id}}, $job => sub {
@@ -461,7 +457,10 @@ sub _consume_nonblocking {
             $self->log->debug("job_count incremented to " . $self->job_count);
 
             my $job = MangoX::Queue::Job->new($doc);
-            $job->queue($self);
+            $job->once(finished => sub {
+                $self->job_count($self->job_count - 1);
+                $self->log->debug('job_count decremented to ' . $self->job_count);
+            });
 
             $self->delay->reset;
             $self->emit_safe(consumed => $job) if $self->has_subscribers('consumed');

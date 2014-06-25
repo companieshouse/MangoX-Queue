@@ -1,20 +1,21 @@
 package MangoX::Queue::Job;
 
-use Mojo::Base -base;
+use Mojo::Base 'Mojo::EventEmitter';
 
-has 'queue' => sub { die('queue not defined') };
+has 'has_finished' => sub { 0 };
 
-sub DESTROY
-{
-    my $self = shift;
+sub DESTROY {
+    my ($self) = @_;
+    
+    $self->finished;
+}
 
-    $self->queue->log->debug('Job completed and object destroyed');
+sub finished {
+    my ($self) = @_;
 
-    $self->queue->job_count($self->queue->job_count - 1);
-
-    $self->queue->log->debug('New job count: ' . $self->queue->job_count);
-
-    return;
+    return if $self->has_finished;
+    $self->has_finished(1);
+    $self->emit_safe("finished");
 }
 
 1;
