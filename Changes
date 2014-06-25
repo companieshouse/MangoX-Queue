@@ -4,6 +4,7 @@ Revision history for Perl module MangoX::Queue
  - Remove circular dependency from MangoX::Queue::Job
  - Add finished method to MangoX::Queue::Job
  - Use events to communicate with the queue
+ - Use bson_time for created value
 
 0.12 2014-06-06
  - A more efficient options hash - optimise out $or operators
