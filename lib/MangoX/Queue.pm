@@ -7,7 +7,6 @@ use Mojo::Log;
 use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
 use MangoX::Queue::Job;
-use DateTime::Tiny;
 
 our $VERSION = '0.12';
 
@@ -16,8 +15,8 @@ has 'log' => sub { Mojo::Log->new->level('error') };
 
 # The Mango::Collection representing the queue
 has 'collection';
-has 'capped';
-has 'stats';
+has 'capped' => sub { $_[0]->stats->{capped} };
+has 'stats' => sub { $_[0]->collection->stats };
 
 # A MangoX::Queue::Delay
 has 'delay' => sub { MangoX::Queue::Delay->new };
@@ -44,13 +43,6 @@ sub new {
     my $self = shift->SUPER::new(@_);
 
     croak qq{No Mango::Collection provided to constructor} unless ref($self->collection) eq 'Mango::Collection';
-
-    $self->stats($self->collection->stats);
-    $self->capped($self->stats->{capped});
-
-    $self->pending_status($self->capped ? 1 : 'Pending');
-    $self->processing_status($self->capped ? 2 : 'Processing');
-    $self->failed_status($self->capped ? 3 : 'Failed');
 
     return $self;
 }
@@ -80,6 +72,20 @@ sub plugin {
     return $self->plugins->{$name};
 }
 
+sub init_status {
+    my ($self) = @_;
+    # Done as late as possible - $self->capped opens a DB connection
+    $self->pending_status($self->capped ? 1 : 'Pending');
+    $self->processing_status($self->capped ? 2 : 'Processing');
+    $self->failed_status($self->capped ? 3 : 'Failed');
+    return {
+        pending_and_processing_status => $self->{pending_and_processing_status},
+        _pending_status => $self->{_pending_status},
+        _processing_status => $self->{_processing_status},
+        _failed_status => $self->{_failed_status},
+    };
+}
+
 sub pending_status {
     my ($self, $new_status) = @_;
 
@@ -88,6 +94,7 @@ sub pending_status {
     $self->{_pending_status} = $new_status;
     $self->_combine_pending_and_processing_status();
 }
+
 sub processing_status {
     my ($self, $new_status) = @_;
 
@@ -96,6 +103,7 @@ sub processing_status {
     $self->{_processing_status} = $new_status;
     $self->_combine_pending_and_processing_status();
 }
+
 sub failed_status {
     my ($self, $new_status) = @_;
 
@@ -118,7 +126,7 @@ sub get_options {
     return {
         query => {
             status => {
-                '$in' => $self->{pending_and_processing_status},
+                '$in' => $self->{pending_and_processing_status} // $self->init_status->{pending_and_processing_status},
             },
             processing => {
                 '$lt' => time - $self->timeout,
@@ -137,7 +145,7 @@ sub get_options {
         update => {
             '$set' => {
                 processing => time,
-                status => $self->{_processing_status},
+                status => $self->{_processing_status} // $self->init_status->{_processing_status},
             },
             '$inc' => {
                 attempt => 1,
@@ -162,9 +170,9 @@ sub enqueue {
 
     my $db_job = {
         priority => $args{priority} // 1,
-        created => $args{created} // DateTime::Tiny->now,
+        created => $args{created} // bson_time,
         data => $job,
-        status => $args{status} // $self->{_pending_status},
+        status => $args{status} // $self->{_pending_status} // $self->init_status->{_pending_status},
         attempt => 1,
         processing => 0,
         delay_until => 0,
@@ -258,7 +266,8 @@ sub _watch_nonblocking {
 sub requeue {
     my ($self, $job, $callback) = @_;
 
-    $job->{status} = ref($self->{_pending_status}) eq 'ARRAY' ? $self->{_pending_status}->[0] : $self->{_pending_status};
+    my $pending = $self->{_pending_status} // $self->init_status->{_pending_status};
+    $job->{status} = ref($pending) eq 'ARRAY' ? $pending->[0] : $pending;
     return $self->update($job, $callback);
 }
 
@@ -394,7 +403,7 @@ sub _consume_blocking {
         $self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
 
         if($doc && $doc->{attempt} > $self->retries) {
-            $doc->{status} = $self->{_failed_status};
+            $doc->{status} = $self->{_failed_status} // $self->init_status->{_failed_status};
             $self->update($doc);
             $doc = undef;
             $self->log->debug("Job exceeded retries, status set to failed and job abandoned");
@@ -446,7 +455,7 @@ sub _consume_nonblocking {
         }
         
         if($doc && $doc->{attempt} > $self->retries) {
-            $doc->{status} = $self->{_failed_status};
+            $doc->{status} = $self->{_failed_status} // $self->init_status->{_failed_status};
             $self->update($doc);
             $doc = undef;
             $self->log->debug("Job exceeded retries, status set to failed and job abandoned");
@@ -520,7 +529,7 @@ Non-blocking mode requires a running L<Mojo::IOLoop>.
     enqueue $queue 'test' => sub { my $id = shift; };
 
     # To set options
-    enqueue $queue priority => 1, created => DateTime::Tiny->now, 'test' => sub { my $id = shift; };
+    enqueue $queue priority => 1, created => bson_time, 'test' => sub { my $id = shift; };
 
     # To watch for a specific job status
     watch $queue $id, 'Complete' => sub {
@@ -562,7 +571,7 @@ Non-blocking mode requires a running L<Mojo::IOLoop>.
     my $id = enqueue $queue 'test';
 
     # To set options
-    my $id = enqueue $queue priority => 1, created => DateTime::Tiny->now, 'test';
+    my $id = enqueue $queue priority => 1, created => bson_time, 'test';
 
     # To watch for a specific job status
     watch $queue $id;
@@ -756,7 +765,7 @@ You can set queue options including priority, created and status.
 
     my $id = enqueue $queue,  
         priority => 1,
-        created => time,
+        created => bson_time,
         status => 'Pending',
         +{
             foo => 'bar'
