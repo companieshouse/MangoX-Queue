@@ -641,6 +641,11 @@ the internal counter. See L<MangoX::Queue::Job> for more details.
 Set to -1 to disable queue concurrency limits. B<Use with caution>, this could result in
 out of memory errors or an extremely slow event loop.
 
+If you need to decrement the job counter early (e.g. to hold on to a reference to the job after you've
+finished processing it), you can call the C<finished> method on the L<MangoX::Queue::Job> object.
+
+    $job->finished;
+
 =head2 failed_status
 
     $self->failed_status('Failed');
