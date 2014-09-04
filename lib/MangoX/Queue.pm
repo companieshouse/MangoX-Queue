@@ -42,6 +42,9 @@ has 'consumers' => sub { {} };
 # Store plugins
 has 'plugins' => sub { {} };
 
+# Compatibility with Mojo::IOLoop->delay
+has 'delay_compat' => 0;
+
 sub new {
     my $self = shift->SUPER::new(@_);
 
@@ -157,6 +160,16 @@ sub get_options {
     };
 }
 
+sub run_callback {
+	my ($self, $callback) = (shift, shift);
+
+	if ($self->delay_compat) {
+		$callback->($self, @_);
+	} else {
+		$callback->(@_);
+	}
+}
+
 sub enqueue {
     my ($self, @args) = @_;
 
@@ -188,13 +201,13 @@ sub enqueue {
             my ($collection, $error, $oid) = @_;
             if($error) {
                 $self->emit_safe(error => qq{Error inserting job into collection: $error}, $db_job, $error);
-                $callback->($db_job, $error);
+                $self->run_callback($callback, $db_job, $error);
                 return;
             }
             $db_job->{_id} = $oid;
             $self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
             eval {
-                $callback->($db_job, undef);
+                $self->run_callback($callback, $db_job, undef);
                 return 1;
             } or $self->emit_safe(error => qq{Error in callback: $@}, $db_job, $@);
         });
@@ -254,7 +267,7 @@ sub _watch_nonblocking {
         if($doc && ((!ref($status) && $doc->{status} eq $status) || (ref($status) eq 'ARRAY' && grep { $_ =~ $doc->{status} } @$status))) {
             $self->log->debug("Status is $status");
             $self->delay->reset;
-            $callback->($doc, undef);
+            $self->run_callback($callback, $doc, undef);
         } else {
             $self->log->debug("Job not found or status doesn't match");
             $self->delay->wait(sub {
@@ -287,11 +300,11 @@ sub dequeue {
 
             if($error) {
                 $self->emit_safe(error => qq(Error removing job from collection: $error), $id_or_job, $error) if $self->has_subscribers('error');
-                $callback->($id_or_job, $error);
+                $self->run_callback($callback, $id_or_job, $error);
                 return;
             }
 
-            $callback->($id_or_job, undef);
+            $self->run_callback($callback, $id_or_job, undef);
             $self->emit_safe(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
         });
     } else {
@@ -313,7 +326,7 @@ sub get {
                 $self->emit_safe(error => qq(Error retrieving job: $error), $id_or_job, $error) if $self->has_subscribers('error');
             }
 
-            $callback->($doc, $error);
+            $self->run_callback($callback, $doc, $error);
         });
     } else {
         return $self->collection->find_one({'_id' => $id});
@@ -333,7 +346,7 @@ sub update {
             if($error) {
                 $self->emit_safe(error => qq(Error updating job: $error), $job, $error) if $self->has_subscribers('error');
             }
-            $callback->($doc, $error);
+            $self->run_callback($callback, $doc, $error);
         });
     } else {
         return $self->collection->update({'_id' => $job->{_id}}, $job, {upsert => 1}) or croak qq{Error updating collection: $@};
@@ -482,7 +495,7 @@ sub _consume_nonblocking {
             $self->emit_safe(consumed => $job) if $self->has_subscribers('consumed');
 
             eval {
-                $callback->($job);
+                $self->run_callback($callback, $job);
                 return 1;
             } or $self->emit_safe(error => "Error in callback: $@");
             return unless Mojo::IOLoop->is_running;
