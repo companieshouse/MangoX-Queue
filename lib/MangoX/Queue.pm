@@ -8,7 +8,7 @@ use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
 use MangoX::Queue::Job;
 
-our $VERSION = '0.15';
+our $VERSION = '0.16';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
@@ -43,7 +43,7 @@ has 'consumers' => sub { {} };
 has 'plugins' => sub { {} };
 
 # Compatibility with Mojo::IOLoop->delay
-has 'delay_compat' => 0;
+has 'delay_compat' => sub { warn "delay_compat will be enabled by default in a future release - please migrate your code"; 0 };
 
 sub new {
     my $self = shift->SUPER::new(@_);
@@ -66,8 +66,8 @@ sub plugin {
     }
 
     eval {
-        $self->plugins->{$name} = $name->new(%$options);  
-        return 1;          
+        $self->plugins->{$name} = $name->new(%$options);
+        return 1;
     } or croak qq{Error calling constructor for plugin $name: $@};
 
     eval {
@@ -263,7 +263,7 @@ sub _watch_nonblocking {
     $self->collection->find_one({'_id' => $id} => sub {
         my ($cursor, $err, $doc) = @_;
         $self->log->debug("Job found by Mango: " . ($doc ? 'Yes' : 'No'));
-        
+
         if($doc && ((!ref($status) && $doc->{status} eq $status) || (ref($status) eq 'ARRAY' && grep { $_ =~ $doc->{status} } @$status))) {
             $self->log->debug("Status is $status");
             $self->delay->reset;
@@ -471,7 +471,7 @@ sub _consume_nonblocking {
             $self->log->error($err);
             $self->emit_safe(error => $err);
         }
-        
+
         if($doc && $doc->{attempt} > $self->retries) {
             $doc->{status} = $self->{_failed_status} // $self->init_status->{_failed_status};
             $self->update($doc);
@@ -501,7 +501,7 @@ sub _consume_nonblocking {
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};
-            Mojo::IOLoop->timer(0, sub { 
+            Mojo::IOLoop->timer(0, sub {
                 $self->_consume_nonblocking($args, $consumer_id, $callback, 0) }
             );
             $self->log->debug("Timer rescheduled (recursive immediate), consumer_id $consumer_id has timer ID: " . $self->consumers->{$consumer_id});
@@ -536,6 +536,10 @@ collection - pass in a collection to the constructor and L<MangoX::Queue> will
 use it. The collection can be plain, capped or sharded.
 
 For an introduction to L<MangoX::Queue>, see L<MangoX::Queue::Tutorial>.
+
+B<API change> - the current API is inconsistent with L<Mojo::IOLoop> and other L<Mojolicious>
+modules. A C<delay_compat> option has been added, which is currently disabled by default.
+This will be enabled by default in a future release, and eventually deprecated.
 
 =head1 SYNOPSIS
 
@@ -645,6 +649,19 @@ The L<Mango::Collection> representing the MongoDB queue collection.
 
 The L<MangoX::Queue::Delay> responsible for dynamically controlling the
 delay between queue queries.
+
+=head2 delay_compat
+
+    my $compat = $queue->delay_compat;
+    $queue->delay_compat(1);
+
+Enabling C<delay_compat> passes C<$self> as the first argument to queue
+callbacks, to fix a compatibility bug with L<Mojo::IOLoop>.
+
+This will be enabled by default in a future release. Please migrate your
+code to work with the new API, and enable C<delay_compat> on construction:
+
+    my $queue = MangoX::Queue->new(delay_compat => 1);
 
 =head2 concurrent_job_limit
 
@@ -795,7 +812,7 @@ Add an item to the queue in blocking mode. The default priority is 1 and status 
 
 You can set queue options including priority, created and status.
 
-    my $id = enqueue $queue,  
+    my $id = enqueue $queue,
         priority => 1,
         created => bson_time,
         status => 'Pending',
@@ -927,6 +944,7 @@ you can check for an error argument to the callback sub:
 =over
 
 =item Ben Vinnerd, ben@vinnerd.com
+=item Olivier Duclos, github.com/oliwer
 
 =back
 
