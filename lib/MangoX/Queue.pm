@@ -1,5 +1,7 @@
 package MangoX::Queue;
 
+our $VERSION = '0.17';
+
 use Mojo::Base 'Mojo::EventEmitter';
 
 use Carp 'croak';
@@ -7,8 +9,6 @@ use Mojo::Log;
 use Mango::BSON ':bson';
 use MangoX::Queue::Delay;
 use MangoX::Queue::Job;
-
-our $VERSION = '0.16';
 
 # A logger
 has 'log' => sub { Mojo::Log->new->level('error') };
