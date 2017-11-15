@@ -200,23 +200,23 @@ sub enqueue {
         return $self->collection->insert($db_job => sub {
             my ($collection, $error, $oid) = @_;
             if($error) {
-                $self->emit_safe(error => qq{Error inserting job into collection: $error}, $db_job, $error);
+                $self->emit(error => qq{Error inserting job into collection: $error}, $db_job, $error);
                 $self->run_callback($callback, $db_job, $error);
                 return;
             }
             $db_job->{_id} = $oid;
-            $self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
+            $self->emit(enqueued => $db_job) if $self->has_subscribers('enqueued');
             eval {
                 $self->run_callback($callback, $db_job, undef);
                 return 1;
-            } or $self->emit_safe(error => qq{Error in callback: $@}, $db_job, $@);
+            } or $self->emit(error => qq{Error in callback: $@}, $db_job, $@);
         });
     } else {
         eval {
             $db_job->{_id} = $self->collection->insert($db_job);
             return 1;
         } or croak qq{Error inserting job into collection: $@};
-        $self->emit_safe(enqueued => $db_job) if $self->has_subscribers('enqueued');
+        $self->emit(enqueued => $db_job) if $self->has_subscribers('enqueued');
         return $db_job;
     }
 }
@@ -299,17 +299,17 @@ sub dequeue {
             my ($collection, $error, $doc) = @_;
 
             if($error) {
-                $self->emit_safe(error => qq(Error removing job from collection: $error), $id_or_job, $error) if $self->has_subscribers('error');
+                $self->emit(error => qq(Error removing job from collection: $error), $id_or_job, $error) if $self->has_subscribers('error');
                 $self->run_callback($callback, $id_or_job, $error);
                 return;
             }
 
             $self->run_callback($callback, $id_or_job, undef);
-            $self->emit_safe(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
+            $self->emit(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
         });
     } else {
         $self->collection->remove({'_id' => $id});
-        $self->emit_safe(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
+        $self->emit(dequeued => $id_or_job) if $self->has_subscribers('dequeued');
     }
 }
 
@@ -323,7 +323,7 @@ sub get {
             my ($collection, $error, $doc) = @_;
 
             if($error) {
-                $self->emit_safe(error => qq(Error retrieving job: $error), $id_or_job, $error) if $self->has_subscribers('error');
+                $self->emit(error => qq(Error retrieving job: $error), $id_or_job, $error) if $self->has_subscribers('error');
             }
 
             $self->run_callback($callback, $doc, $error);
@@ -344,7 +344,7 @@ sub update {
         return $self->collection->update({'_id' => $job->{_id}}, $job => sub {
             my ($collection, $error, $doc) = @_;
             if($error) {
-                $self->emit_safe(error => qq(Error updating job: $error), $job, $error) if $self->has_subscribers('error');
+                $self->emit(error => qq(Error updating job: $error), $job, $error) if $self->has_subscribers('error');
             }
             $self->run_callback($callback, $doc, $error);
         });
@@ -428,7 +428,7 @@ sub _consume_blocking {
 
         if($doc) {
             $doc->{_id} = $doc->{_id}->to_string if $self->no_binary_oid;
-            $self->emit_safe(consumed => $doc) if $self->has_subscribers('consumed');
+            $self->emit(consumed => $doc) if $self->has_subscribers('consumed');
             return $doc;
         } else {
             last if $fetch;
@@ -446,7 +446,7 @@ sub _consume_nonblocking {
     if ($self->concurrent_job_limit > -1 && $self->job_count >= $self->concurrent_job_limit) {
         return unless Mojo::IOLoop->is_running;
         return if $fetch;
-        $self->emit_safe(concurrent_job_limit_reached => $self->concurrent_job_limit) if $self->has_subscribers('concurrent_job_limit_reached');
+        $self->emit(concurrent_job_limit_reached => $self->concurrent_job_limit) if $self->has_subscribers('concurrent_job_limit_reached');
         $self->log->debug("concurrent_job_limit_reached = " . $self->concurrent_job_limit . ", job_count = " . $self->job_count);
         return unless exists $self->consumers->{$consumer_id};
 
@@ -469,7 +469,7 @@ sub _consume_nonblocking {
 
         if($err) {
             $self->log->error($err);
-            $self->emit_safe(error => $err);
+            $self->emit(error => $err);
         }
 
         if($doc && $doc->{attempt} > $self->retries) {
@@ -492,12 +492,12 @@ sub _consume_nonblocking {
             });
 
             $self->delay->reset;
-            $self->emit_safe(consumed => $job) if $self->has_subscribers('consumed');
+            $self->emit(consumed => $job) if $self->has_subscribers('consumed');
 
             eval {
                 $self->run_callback($callback, $job);
                 return 1;
-            } or $self->emit_safe(error => "Error in callback: $@");
+            } or $self->emit(error => "Error in callback: $@");
             return unless Mojo::IOLoop->is_running;
             return if $fetch;
             return unless exists $self->consumers->{$consumer_id};

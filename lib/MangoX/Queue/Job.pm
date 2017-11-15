@@ -15,7 +15,7 @@ sub finished {
 
     return if $self->has_finished;
     $self->has_finished(1);
-    $self->emit_safe("finished");
+    $self->emit("finished");
 }
 
 1;
